@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
@@ -29,7 +29,9 @@ def get_config_value(key: str):
         return CHATBOT_CONFIG[key]
     return CHATBOT_CONFIG.get(f"default_{key}")
 
-extract_router = APIRouter()
+from backend.utils.auth import verify_token
+
+extract_router = APIRouter(dependencies=[Depends(verify_token)])
 
 # Enums for model providers
 class ModelProvider(str, Enum):

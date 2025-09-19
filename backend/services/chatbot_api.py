@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import httpx
@@ -28,7 +28,9 @@ def get_config_value(key: str):
         return CHATBOT_CONFIG[key]
     return CHATBOT_CONFIG.get(f"default_{key}")
 
-chatbot_router = APIRouter()
+from backend.utils.auth import verify_token
+
+chatbot_router = APIRouter(dependencies=[Depends(verify_token)])
 
 # Enums for model providers
 class ModelProvider(str, Enum):
@@ -82,13 +84,18 @@ async def retrieve_relevant_docs(query: str, index_name: str, top_k: int = 5) ->
     print("[retrieve_relevant_docs] - Starts retrieving function")
     async with httpx.AsyncClient(timeout=60) as client:
         try:
+            headers = {}
+            api_token = os.getenv("API_TOKEN") or os.getenv("LOOMY_API_TOKEN")
+            if api_token:
+                headers["Authorization"] = f"Bearer {api_token}"
             response = await client.post(
                 f"{KB_API_BASE_URL}/retrieve",
                 json={
                     "query": query,
                     "index_name": index_name,
                     "top_k": top_k
-                }
+                },
+                headers=headers
             )
             print("[retrieve_relevant_docs] - Post request made")
         except Exception as e:

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, Form, Response
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, Response, Depends
 import pdfplumber
 import io
 import uuid
@@ -14,7 +14,9 @@ import os
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-kb_router = APIRouter()
+from backend.utils.auth import verify_token
+
+kb_router = APIRouter(dependencies=[Depends(verify_token)])
 
 # Google Cloud Storage
 gcp_credentials_info = os.getenv("GCP_SERVICE_ACCOUNT_CREDENTIALS")
