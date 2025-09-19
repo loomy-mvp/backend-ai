@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import httpx
@@ -28,7 +28,7 @@ def get_config_value(key: str):
         return CHATBOT_CONFIG[key]
     return CHATBOT_CONFIG.get(f"default_{key}")
 
-chatbot_api = FastAPI(title="Chatbot API", description="RAG-powered chatbot using LangChain", version="1.0.0")
+chatbot_router = APIRouter()
 
 # Enums for model providers
 class ModelProvider(str, Enum):
@@ -206,7 +206,7 @@ Context:
     return chain
 
 # API Endpoints
-@chatbot_api.post("/chat", response_model=ChatResponse)
+@chatbot_router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """Main chat endpoint with RAG functionality."""
     try:
@@ -285,7 +285,7 @@ async def chat(request: ChatRequest):
         print(f"[chat] Exception occurred: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing chat request: {str(e)}")
 
-@chatbot_api.get("/sessions", response_model=SessionListResponse)
+@chatbot_router.get("/sessions", response_model=SessionListResponse)
 async def get_sessions():
     """Get list of all chat sessions."""
     sessions = []
@@ -299,7 +299,7 @@ async def get_sessions():
     
     return SessionListResponse(sessions=sessions)
 
-@chatbot_api.get("/sessions/{session_id}/history")
+@chatbot_router.get("/sessions/{session_id}/history")
 async def get_session_history(session_id: str):
     """Get chat history for a specific session."""
     if session_id not in chat_sessions:
@@ -318,7 +318,7 @@ async def get_session_history(session_id: str):
     
     return {"session_id": session_id, "messages": messages}
 
-@chatbot_api.delete("/sessions/{session_id}", response_model=DeleteSessionResponse)
+@chatbot_router.delete("/sessions/{session_id}", response_model=DeleteSessionResponse)
 async def delete_session(session_id: str):
     """Delete a specific chat session."""
     if session_id not in chat_sessions:
@@ -332,7 +332,7 @@ async def delete_session(session_id: str):
         session_id=session_id
     )
 
-@chatbot_api.delete("/sessions")
+@chatbot_router.delete("/sessions")
 async def clear_all_sessions():
     """Clear all chat sessions."""
     chat_sessions.clear()
@@ -340,7 +340,7 @@ async def clear_all_sessions():
     
     return {"message": "All sessions cleared successfully"}
 
-@chatbot_api.get("/health")
+@chatbot_router.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
@@ -349,7 +349,7 @@ async def health_check():
         "active_sessions": len(chat_sessions)
     }
 
-@chatbot_api.get("/providers")
+@chatbot_router.get("/providers")
 async def get_available_providers():
     """Get list of available LLM providers."""
     return {
@@ -361,3 +361,7 @@ async def get_available_providers():
         "default_model": CHATBOT_CONFIG["default_model"],
         "default_max_tokens": CHATBOT_CONFIG["default_max_tokens"]
     }
+
+# Standalone FastAPI app for running this module directly
+chatbot_api = FastAPI(title="Chatbot API", description="RAG-powered chatbot using LangChain", version="1.0.0")
+chatbot_api.include_router(chatbot_router)

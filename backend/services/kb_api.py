@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, Response
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, Response
 import pdfplumber
 import io
 import uuid
@@ -14,7 +14,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-kb_api = FastAPI()
+kb_router = APIRouter()
 
 # Google Cloud Storage
 gcp_credentials_info = os.getenv("GCP_SERVICE_ACCOUNT_CREDENTIALS")
@@ -92,7 +92,7 @@ def chunk_document(doc_metadata: str, content: str, ) -> list:
     })
     return chunks
 
-@kb_api.post("/get-or-create-bucket")
+@kb_router.post("/get-or-create-bucket")
 def get_or_create_bucket(req: BucketRequest):
     bucket_name = "rag-suite-bucket-" + req.bucket
     try:
@@ -102,7 +102,7 @@ def get_or_create_bucket(req: BucketRequest):
     files = [blob.name for blob in bucket.list_blobs()]
     return {"bucket": req.bucket, "files": files}
 
-@kb_api.post("/upload-file")
+@kb_router.post("/upload-file")
 def upload_file(
     bucket: str = Form(...),
     overwrite: str = Form("false"),
@@ -120,7 +120,7 @@ def upload_file(
     else:
         return JSONResponse(status_code=409, content={"error": "File already exists. Use overwrite to replace it."})
 
-@kb_api.post("/embed-docs")
+@kb_router.post("/embed-docs")
 def embed_docs(req: EmbedRequest):
     bucket_name = "rag-suite-bucket-" + req.bucket
     bucket = storage_client.get_bucket(bucket_name)
@@ -153,7 +153,7 @@ def embed_docs(req: EmbedRequest):
     vectors = [Vector(id=chunk["id"], values=emb, metadata={"page": chunk["page"], "chunk_text": chunk["text"]}) for chunk, emb in zip(chunks, embeddings)]
     return {"status": "success", "chunks": len(chunks), "vectors": vectors}
 
-@kb_api.post("/upsert-to-vector-store")
+@kb_router.post("/upsert-to-vector-store")
 def upsert_to_vector_store(req: UpsertRequest):
     if not pc.has_index(req.index_name):
         pc.create_index(
@@ -169,7 +169,7 @@ def upsert_to_vector_store(req: UpsertRequest):
     index.upsert(req.vectors, namespace=None) # TODO: Deep down namespace
     return {"status": "success", "upserted": len(req.vectors)}
 
-@kb_api.post("/delete-file")
+@kb_router.post("/delete-file")
 def delete_file(req: DeleteFileRequest):
     bucket_name = "rag-suite-bucket-" + req.bucket
     try:
@@ -183,7 +183,7 @@ def delete_file(req: DeleteFileRequest):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@kb_api.post("/download-file")
+@kb_router.post("/download-file")
 def download_file(req: DeleteFileRequest):
     """Download a file from the user's GCS bucket and return its contents."""
     bucket_name = "rag-suite-bucket-" + req.bucket
@@ -198,7 +198,7 @@ def download_file(req: DeleteFileRequest):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-@kb_api.post("/retrieve")
+@kb_router.post("/retrieve")
 def retrieve(req: RetrieveRequest):
     """Retrieve similar documents from the Pinecone vector store."""
     try:
@@ -252,3 +252,7 @@ def retrieve(req: RetrieveRequest):
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+# Standalone FastAPI app for running this module directly
+kb_api = FastAPI(title="KB API", description="Knowledge Base API", version="1.0.0")
+kb_api.include_router(kb_router)

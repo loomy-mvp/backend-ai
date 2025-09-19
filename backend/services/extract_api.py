@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional, Union
 from langchain.schema import HumanMessage, AIMessage, SystemMessage
@@ -29,11 +29,7 @@ def get_config_value(key: str):
         return CHATBOT_CONFIG[key]
     return CHATBOT_CONFIG.get(f"default_{key}")
 
-extract_api = FastAPI(
-    title="Stateless Extractor API", 
-    description="Stateless document extraction service", 
-    version="2.0.0"
-)
+extract_router = APIRouter()
 
 # Enums for model providers
 class ModelProvider(str, Enum):
@@ -264,7 +260,7 @@ def convert_history_to_messages(history: List[Dict[str, str]]) -> List:
     return messages
 
 # API Endpoints
-@extract_api.post("/parse_document", response_model=ParseDocumentResponse)
+@extract_router.post("/parse_document", response_model=ParseDocumentResponse)
 async def parse_document(file: UploadFile = File(...)):
     """
     Parse a document and extract text and images.
@@ -298,7 +294,7 @@ async def parse_document(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
 
-@extract_api.post("/extract", response_model=ExtractResponse)
+@extract_router.post("/extract", response_model=ExtractResponse)
 async def extract(request: ExtractRequest):
     """
     Extract information from document content using the specified template.
@@ -354,7 +350,7 @@ async def extract(request: ExtractRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing extract request: {str(e)}")
 
-@extract_api.get("/health")
+@extract_router.get("/health")
 async def health_check():
     """Check the health status of the API."""
     return {
@@ -363,7 +359,7 @@ async def health_check():
         "stateless": True
     }
 
-@extract_api.get("/providers")
+@extract_router.get("/providers")
 async def get_available_providers():
     """Get information about available LLM providers and their configurations."""
     return {
@@ -392,7 +388,7 @@ async def get_available_providers():
         }
     }
 
-@extract_api.get("/")
+@extract_router.get("/")
 async def root():
     """API documentation and usage examples."""
     return {
@@ -425,3 +421,11 @@ async def root():
             ]
         }
     }
+
+# Standalone FastAPI app for running this module directly
+extract_api = FastAPI(
+    title="Stateless Extractor API", 
+    description="Stateless document extraction service", 
+    version="2.0.0"
+)
+extract_api.include_router(extract_router)
