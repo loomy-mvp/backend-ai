@@ -1,7 +1,7 @@
 from fastapi import FastAPI
-from services.kb_api import kb_api
-from services.chatbot_api import chatbot_api
-from services.extract_api import extract_api
+from .services.kb_api import kb_api
+from .services.chatbot_api import chatbot_api
+from .services.extract_api import extract_api
 
 # Create the main app
 app = FastAPI()

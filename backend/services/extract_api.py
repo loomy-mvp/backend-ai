@@ -20,8 +20,8 @@ load_dotenv(override=True)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
-from config.chatbot_config import CHATBOT_CONFIG
-from utils.prompts import EXTRACTION_SYSTEM_PROMPT, EXTRACTION_USER_PROMPT
+from backend.config.chatbot_config import CHATBOT_CONFIG
+from backend.utils.prompts import EXTRACTION_SYSTEM_PROMPT, EXTRACTION_USER_PROMPT
 
 # Helper to get config value with fallback to default
 def get_config_value(key: str):

@@ -20,7 +20,7 @@ load_dotenv(override=True)
 # Configuration
 KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-from config.chatbot_config import CHATBOT_CONFIG
+from backend.config.chatbot_config import CHATBOT_CONFIG
 
 # Helper to get config value with fallback to default
 def get_config_value(key: str):

@@ -7,17 +7,17 @@ from pathlib import Path
 def start_kb_api():
     """Start the knowledge base API server."""
     print("Starting KB API server on http://localhost:8000")
-    uvicorn.run("services.kb_api:kb_api", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("backend.services.kb_api:kb_api", host="0.0.0.0", port=8000, reload=True)
 
 def start_chatbot_api():
     """Start the chatbot API server."""
     print("Starting Chatbot API server on http://localhost:8001")
-    uvicorn.run("services.chatbot_api:chatbot_api", host="0.0.0.0", port=8001, reload=True)
+    uvicorn.run("backend.services.chatbot_api:chatbot_api", host="0.0.0.0", port=8001, reload=True)
 
 def start_extract_api():
     """Start the extract API server."""
     print("Starting Extract API server on http://localhost:8002")
-    uvicorn.run("services.extract_api:extract_api", host="0.0.0.0", port=8002, reload=True)
+    uvicorn.run("backend.services.extract_api:extract_api", host="0.0.0.0", port=8002, reload=True)
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
@@ -39,6 +39,6 @@ if __name__ == "__main__":
         print("  python start_apis.py chatbot - Start chatbot API")
         print("  python start_apis.py extract - Start extract API")
         print("\nOr run them separately in different terminals:")
-        print("  Terminal 1: uvicorn services.kb_api:kb_api --host 0.0.0.0 --port 8000 --reload")
-        print("  Terminal 2: uvicorn services.chatbot_api:chatbot_api --host 0.0.0.0 --port 8001 --reload")
-        print("  Terminal 3: uvicorn services.extract_api:extract_api --host 0.0.0.0 --port 8002 --reload")
+    print("  Terminal 1: uvicorn backend.services.kb_api:kb_api --host 0.0.0.0 --port 8000 --reload")
+    print("  Terminal 2: uvicorn backend.services.chatbot_api:chatbot_api --host 0.0.0.0 --port 8001 --reload")
+    print("  Terminal 3: uvicorn backend.services.extract_api:extract_api --host 0.0.0.0 --port 8002 --reload")
