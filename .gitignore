@@ -1,0 +1,8 @@
+*checkpoint*
+*__pycache__*
+.env
+.venv
+*frontend*
+.vscode/
+products/
+reflex*

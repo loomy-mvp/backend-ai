@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+google-cloud-storage
+cohere
+pinecone-client
+pydantic
+httpx
+python-dotenv
+pdfplumber 
+langchain 
