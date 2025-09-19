@@ -7,7 +7,7 @@ import numpy as np
 from pydantic import BaseModel
 from google.cloud import storage
 from google.oauth2 import service_account
-import cohere as co
+import cohere
 from pinecone import Pinecone, ServerlessSpec, Vector
 from fastapi.responses import JSONResponse
 import os
