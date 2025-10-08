@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, UploadFile, File, Form, Response, Depends
+from fastapi import FastAPI, APIRouter, UploadFile, File, Form, Response, Depends, BackgroundTasks
 import pdfplumber
 import io
 import uuid
@@ -18,6 +18,8 @@ from backend.utils.auth import verify_token
 
 kb_router = APIRouter(dependencies=[Depends(verify_token)])
 
+# TODO: Update all the bucket, index and namespaces with user_id or organization_id to isolate data between users
+
 # Google Cloud Storage
 gcp_credentials_info = os.getenv("GCP_SERVICE_ACCOUNT_CREDENTIALS")
 gcp_credentials_info = json.loads(gcp_credentials_info)
@@ -32,7 +34,11 @@ pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=pinecone_api_key)
 
 class EmbedRequest(BaseModel):
-    bucket: str
+    library: str  # "organization" or "private"
+    organization_id: str
+    user_id: str = None  # Only required if library is "private"
+    storage_path: str | None = None
+    overwrite: bool = False # Whether to overwrite existing vectors
 
 class BucketRequest(BaseModel):
     bucket: str
@@ -40,14 +46,29 @@ class BucketRequest(BaseModel):
 class UpsertRequest(BaseModel):
     index_name: str
     vectors: list  # list of [id, embedding]
+    namespace: str = None  # Namespace for the vectors
+
+class StorageRequest(BaseModel):
+    user_id: str = Form(...),
+    organization_id: str = Form(...),
+    document_id: str = Form(...),
+    filename: str = Form(...),
+    file: UploadFile = File(...),
+    content_type: str = Form(...),
+    overwrite: str = Form("false")
 
 class DeleteFileRequest(BaseModel):
-    bucket: str
-    file_path: str
+    organization_id: str
+    library: str  # "organization" or "private"
+    storage_path: str | None = None
+    filename: str | None = None
+    user_id: str | None = None  # Required when library is "private"
 
 class RetrieveRequest(BaseModel):
     query: str
-    index_name: str
+    organization_id: str
+    library: str  # "organization" or "private"
+    user_id: str | None = None  # Required when library is "private"
     top_k: int = 5
 
 def cosine_similarity(a, b):
@@ -80,7 +101,8 @@ def chunk_document(doc_metadata: str, content: str, ) -> list:
             chunks.append({
                 "id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
                 "page": doc_metadata["page"],
-                "text": current_chunk
+                "text": current_chunk,
+                "storage_path": doc_metadata["storage_path"]
             })
             # Start new chunk
             current_chunk = para
@@ -90,112 +112,419 @@ def chunk_document(doc_metadata: str, content: str, ) -> list:
     chunks.append({
         "id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
         "page": doc_metadata["page"],
-        "text": current_chunk
+        "text": current_chunk,
+        "storage_path": doc_metadata["storage_path"]
     })
     return chunks
 
-@kb_router.post("/get-or-create-bucket")
-def get_or_create_bucket(req: BucketRequest):
-    bucket_name = "rag-suite-bucket-" + req.bucket
-    try:
-        bucket = storage_client.get_bucket(bucket_name)
-    except Exception:
-        bucket = storage_client.create_bucket(bucket_name)
-    files = [blob.name for blob in bucket.list_blobs()]
-    return {"bucket": req.bucket, "files": files}
+async def process_file_storage(storage_request: StorageRequest):
+    """Background task to process file storage."""
+    file_bytes = await storage_request.file.read()
+    _store_file(
+        organization_id=storage_request.organization_id,
+        user_id=storage_request.user_id,
+        filename=storage_request.filename,
+        file_bytes=file_bytes,
+        overwrite=storage_request.overwrite,
+        library=getattr(storage_request, "library", None),
+        content_type=storage_request.content_type,
+    )
+    # If file exists and overwrite is false, we just skip the upload
 
-@kb_router.post("/upload-file")
-def upload_file(
-    bucket: str = Form(...),
-    overwrite: str = Form("false"),
-    file: UploadFile = File(...)
-):
-    bucket_name = "rag-suite-bucket-" + bucket
+def _store_file(
+    *,
+    organization_id: str,
+    user_id: str,
+    filename: str,
+    file_bytes: bytes,
+    overwrite: str | bool = "false",
+    library: str | None = None,
+    content_type: str | None = None,
+) -> dict:
+    """Store a file in Google Cloud Storage following library conventions."""
+
+    overwrite_flag = str(overwrite).lower() == "true"
+
+    # Determine bucket suffix based on library type
+    if library == "organization":
+        bucket_suffix = "org"
+    elif library == "private":
+        bucket_suffix = user_id
+    else:
+        raise ValueError("library must be 'organization' or 'private'")
+
+    bucket_name = f"bucket-{organization_id}-{bucket_suffix}"
+
     try:
         bucket_obj = storage_client.get_bucket(bucket_name)
     except Exception:
         bucket_obj = storage_client.create_bucket(bucket_name)
-    blob = bucket_obj.blob(file.filename)
-    if not blob.exists() or overwrite == "true":
-        blob.upload_from_file(file.file, rewind=True)
-        return {"status": "success", "filename": file.filename}
+
+    # Determine folder prefix based on library type
+    if library == "organization":
+        folder_prefix = "organization/"
+    elif library == "private":
+        folder_prefix = f"private/{user_id}/"
     else:
-        return JSONResponse(status_code=409, content={"error": "File already exists. Use overwrite to replace it."})
+        folder_prefix = ""
 
-@kb_router.post("/embed-docs")
-def embed_docs(req: EmbedRequest):
-    bucket_name = "rag-suite-bucket-" + req.bucket
+    storage_path = folder_prefix + filename
+    blob = bucket_obj.blob(storage_path)
+
+    if blob.exists() and not overwrite_flag:
+        # ? Should it really return something? Check in the orchestrtor method
+        return {
+            "status": "skipped",
+            "filename": storage_path,
+            "reason": "file_exists",
+        }
+
+    blob.upload_from_string(file_bytes, content_type=content_type) # ! This is GCP Storage content_type, we shall use the same
+    return {"status": "uploaded", "filename": storage_path}
+
+def _embed_doc(embed_request: EmbedRequest):
+    """Embed a single stored document and prepare vectors for upsert."""
+
+    storage_path = embed_request.storage_path
+
+    if not storage_path:
+        raise ValueError("storage_path is required to embed a document")
+
+    # Validate library type
+    if embed_request.library not in ["organization", "private"]:
+        raise ValueError("library must be 'organization' or 'private'")
+
+    # Validate user_id for private library
+    if embed_request.library == "private" and not embed_request.user_id:
+        raise ValueError("user_id is required for private library")
+
+    # Determine bucket name and folder prefix
+    if embed_request.library == "organization":
+        bucket_suffix = "org"
+        folder_prefix = "organization/"
+        namespace = "organization"
+    else:
+        bucket_suffix = embed_request.user_id
+        folder_prefix = f"private/{embed_request.user_id}/"
+        namespace = embed_request.user_id
+
+    bucket_name = f"bucket-{embed_request.organization_id}-{bucket_suffix}"
+    index_name = embed_request.organization_id
+
     bucket = storage_client.get_bucket(bucket_name)
-    blobs = list(bucket.list_blobs())
-    docs = []
-    for blob in blobs:
-        # This is valid only for pdfs
-        content = blob.download_as_bytes()
-        with pdfplumber.open(io.BytesIO(content)) as pdf:
-            for i, page in enumerate(pdf.pages):
-                page_text = page.extract_text() or ""
-                docs.append({
-                    "name": blob.name,
-                    "page": i + 1,
-                    "text": page_text
-                })
+    blob = bucket.blob(storage_path)
 
-    # 2. Chunk documents
+    if not blob.exists():
+        return {
+            "status": "error",
+            "message": f"Document {storage_path} not found in bucket {bucket_name}",
+            "chunks": 0,
+            "vectors": [],
+            "index_name": index_name,
+            "namespace": namespace,
+        }
+    
+    # Temporarily only support PDF documents
+    if not storage_path.lower().endswith(".pdf"):
+        return {
+            "status": "skipped",
+            "message": "Only PDF documents are currently supported",
+            "chunks": 0,
+            "vectors": [],
+            "index_name": index_name,
+            "namespace": namespace,
+        }
+
+    # If vectors for this document already exist, delete them to avoid duplicates
+    if pc.has_index(index_name) and embed_request.overwrite:
+        try:
+            index = pc.Index(name=index_name)
+            index.delete(namespace=namespace, filter={"storage_path": {"$eq": storage_path}})
+        except Exception as e:
+            print(f"[_embed_doc] Warning: unable to delete existing vectors for {storage_path}: {e}")
+    else:
+        index = None
+
+    file_bytes = blob.download_as_bytes()
+    doc_name = storage_path[len(folder_prefix):] if storage_path.startswith(folder_prefix) else storage_path
+
     chunks = []
-    for doc in docs:
-        doc_metadata = {"name": doc["name"], "page": doc["page"]}
-        chunks.extend(chunk_document(doc_metadata, doc["text"]))
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for page_number, page in enumerate(pdf.pages, start=1):
+            page_text = page.extract_text() or ""
+            if not page_text.strip():
+                continue
+            doc_metadata = {
+                "name": doc_name,
+                "page": page_number,
+                "storage_path": storage_path,
+            }
+            chunks.extend(chunk_document(doc_metadata, page_text))
 
-    # 3. Embed with Cohere
+    if not chunks:
+        return {
+            "status": "error",
+            "message": "No chunks generated",
+            "chunks": 0,
+            "vectors": [],
+            "index_name": index_name,
+            "namespace": namespace,
+        }
+
     texts = [chunk["text"] for chunk in chunks]
-    embeddings = co.embed(texts=texts, model="embed-v4.0").embeddings
+    embeddings = co.embed(texts=texts, model=embedding_model_name).embeddings
 
-    # Return chunk IDs and embeddings for upsert
-    # vectors = [(chunk["id"], emb) for chunk, emb in zip(chunks, embeddings)]
-    vectors = [Vector(id=chunk["id"], values=emb, metadata={"page": chunk["page"], "chunk_text": chunk["text"]}) for chunk, emb in zip(chunks, embeddings)]
-    return {"status": "success", "chunks": len(chunks), "vectors": vectors}
+    vectors = [
+        Vector(
+            id=chunk["id"],
+            values=embedding,
+            metadata={
+                "page": chunk["page"],
+                "chunk_text": chunk["text"],
+                "storage_path": chunk["storage_path"],
+                "library": embed_request.library,
+                "organization_id": embed_request.organization_id,
+                "user_id": embed_request.user_id if embed_request.library == "private" else None,
+            },
+        )
+        for chunk, embedding in zip(chunks, embeddings)
+    ]
 
-@kb_router.post("/upsert-to-vector-store")
-def upsert_to_vector_store(req: UpsertRequest):
-    if not pc.has_index(req.index_name):
+    return {
+        "status": "success",
+        "chunks": len(chunks),
+        "vectors": vectors,
+        "index_name": index_name,
+        "namespace": namespace,
+        "doc_name": doc_name,
+    }
+
+def _upsert_to_vector_store(index_name: str, namespace: str, vectors: list):
+    """Internal version of upsert_to_vector_store for use within upload-doc."""
+    if not pc.has_index(index_name):
         pc.create_index(
-            name=req.index_name,
+            name=index_name,
             dimension=1536,
             metric="cosine",
             spec=ServerlessSpec(
                 cloud="aws",
-                region="us-east-1"
+                region="us-east-1" # To be changed to EU
             )
         )
-    index = pc.Index(name=req.index_name)
-    index.upsert(req.vectors, namespace=None) # TODO: Deep down namespace
-    return {"status": "success", "upserted": len(req.vectors)}
+    index = pc.Index(name=index_name)
+    # Use the namespace from request, or default to None
+    index.upsert(vectors, namespace=namespace)
+    return {"status": "success", "upserted": len(vectors), "namespace": namespace}
+
+async def process_doc_upload(upload_data: dict):
+    """Background task to process complete document upload, embedding, and storage with file content."""
+    try:
+        print(f"[process_doc_upload] Starting document processing for {upload_data['filename']}")
+        
+        # Step 1: Store the file
+        print("[process_doc_upload] Step 1: Storing file")
+
+        storage_result = _store_file(
+            organization_id=upload_data["organization_id"],
+            user_id=upload_data["user_id"],
+            filename=upload_data["filename"],
+            file_bytes=upload_data["file_content"],
+            overwrite=upload_data.get("overwrite", "false"),
+            library=upload_data.get("library"),
+            content_type=upload_data.get("content_type"),
+        )
+        
+        print(f"[process_doc_upload] Storage result: {storage_result}")
+
+        storage_path = storage_result.get("filename")
+        if storage_result.get("status") == "skipped":
+            print("[process_doc_upload] Storage skipped; aborting embedding and upsert")
+            return
+
+        if not storage_path:
+            print("[process_doc_upload] Missing stored filename; aborting")
+            return
+
+        # Step 2: Embed the document
+        print("[process_doc_upload] Step 2: Embedding document")
+        embed_request = EmbedRequest(
+            library=upload_data['library'],
+            organization_id=upload_data['organization_id'],
+            user_id=upload_data['user_id'] if upload_data['library'] == "private" else None,
+            storage_path=storage_path,
+            overwrite=str(upload_data.get("overwrite", "false")).lower() == "true"
+        )
+
+        embed_result = _embed_doc(embed_request)
+        print(f"[process_doc_upload] Embed result: status={embed_result.get('status')} chunks={embed_result.get('chunks', 0)}")
+        
+        # Step 3: Upsert to vector store (only if we have vectors)
+        if embed_result.get("vectors") and len(embed_result["vectors"]) > 0:
+            print("[process_doc_upload] Step 3: Upserting to vector store")
+            upsert_result = _upsert_to_vector_store(
+                index_name=embed_result["index_name"],
+                namespace=embed_result["namespace"],
+                vectors=embed_result["vectors"]
+            )
+            print(f"[process_doc_upload] Upsert result: upserted={upsert_result.get('upserted', 0)}")
+        else:
+            print("[process_doc_upload] No vectors to upsert")
+            upsert_result = {"status": "skipped", "reason": "no_vectors"}
+        
+        # TODO: Send webhook notification here when ready
+        # ! The send_webhook function and webhook URL configuration are not implemented yet
+        # webhook_payload = {
+        #     "document_id": upload_data['document_id'],
+        #     "filename": upload_data['filename'],
+        #     "status": "completed",
+        #     "storage": storage_result,
+        #     "embedding": {
+        #         "chunks": embed_result.get("chunks", 0),
+        #         "vectors": len(embed_result.get("vectors", []))
+        #     },
+        #     "upsert": upsert_result
+        # }
+        # await send_webhook(webhook_payload)
+        
+        print(f"[process_doc_upload] Document processing completed for {upload_data['filename']}")
+        
+    except Exception as e:
+        print(f"[process_doc_upload] Error processing document {upload_data['filename']}: {str(e)}")
+        # TODO: Send webhook notification for error when ready
+        # ! The send_webhook function and webhook URL configuration are not implemented yet
+        # webhook_payload = {
+        #     "document_id": upload_data['document_id'],
+        #     "filename": upload_data['filename'],
+        #     "status": "error",
+        #     "error": str(e)
+        # }
+        # await send_webhook(webhook_payload)
+
+@kb_router.post("/upload-doc")
+async def upload_doc(
+    background_tasks: BackgroundTasks,
+    user_id: str = Form(...),
+    organization_id: str = Form(...),
+    document_id: str = Form(...),
+    library: str = Form(...),  # "organization" or "private"
+    file: UploadFile = File(...),
+    content_type: str = Form(...),
+    overwrite: str = Form("false")
+):
+    """
+    Complete document upload endpoint that handles:
+    1. File storage to GCS
+    2. Document embedding
+    3. Vector upsert to Pinecone
+    
+    This endpoint processes everything asynchronously and returns immediately.
+    Use webhooks (when implemented) to get notification of completion.
+    
+    Args:
+        user_id: User identifier
+        organization_id: Organization identifier  
+        document_id: Unique document identifier
+        library: "organization" or "private" - determines storage location and access
+        file: The PDF file to upload
+        content_type: MIME type of the file
+        overwrite: "true" to overwrite existing files, "false" to skip
+    """
+    # Validate library type
+    if library not in ["organization", "private"]:
+        return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
+    
+    # Validate user_id for private library
+    if library == "private" and not user_id:
+        return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
+    
+    # Read file content before passing to background task
+    file_content = await file.read()
+    filename = file.filename # ? Check that this is the entire path or just the name
+    
+    # Create upload request object for background processing
+    upload_data = {
+        "user_id": user_id,
+        "organization_id": organization_id,
+        "document_id": document_id,
+        "filename": filename,
+        "file_content": file_content,
+        "library": library,
+        "content_type": content_type,
+        "overwrite": overwrite
+    }
+    
+    # Add complete document processing to background tasks
+    background_tasks.add_task(process_doc_upload, upload_data)
+    
+    # Return immediately with receipt
+    return {
+        "user_id": user_id,
+        "organization_id": organization_id,
+        "document_id": document_id,
+        "storage_path": filename,
+        "library": library,
+        "status": "document_received",
+        "message": "Document upload and processing started. You will receive a webhook notification when complete."
+    }
 
 @kb_router.post("/delete-file")
 def delete_file(req: DeleteFileRequest):
-    bucket_name = "rag-suite-bucket-" + req.bucket
     try:
+        if req.library not in ["organization", "private"]:
+            return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
+
+        if req.library == "private" and not req.user_id:
+            return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
+
+        bucket_suffix = "org" if req.library == "organization" else req.user_id
+        folder_prefix = "organization/" if req.library == "organization" else f"private/{req.user_id}/"
+
+        storage_path = req.storage_path or req.filename
+        if not storage_path:
+            return JSONResponse(status_code=400, content={"error": "storage_path or filename is required"})
+
+        normalized_path = storage_path.lstrip("/")
+        if not normalized_path.startswith(folder_prefix):
+            normalized_path = folder_prefix + normalized_path
+
+        bucket_name = f"bucket-{req.organization_id}-{bucket_suffix}"
         bucket = storage_client.get_bucket(bucket_name)
-        blob = bucket.blob(req.file_path)
+        blob = bucket.blob(normalized_path)
         if blob.exists():
             blob.delete()
-            return {"status": "success", "deleted": req.file_path}
-        else:
-            return JSONResponse(status_code=404, content={"error": "File not found."})
+            return {"status": "success", "deleted": normalized_path}
+        return JSONResponse(status_code=404, content={"error": "File not found."})
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @kb_router.post("/download-file")
 def download_file(req: DeleteFileRequest):
     """Download a file from the user's GCS bucket and return its contents."""
-    bucket_name = "rag-suite-bucket-" + req.bucket
     try:
+        if req.library not in ["organization", "private"]:
+            return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
+
+        if req.library == "private" and not req.user_id:
+            return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
+
+        bucket_suffix = "org" if req.library == "organization" else req.user_id
+        folder_prefix = "organization/" if req.library == "organization" else f"private/{req.user_id}/"
+
+        storage_path = req.storage_path or req.filename
+        if not storage_path:
+            return JSONResponse(status_code=400, content={"error": "storage_path or filename is required"})
+
+        normalized_path = storage_path.lstrip("/")
+        if not normalized_path.startswith(folder_prefix):
+            normalized_path = folder_prefix + normalized_path
+
+        bucket_name = f"bucket-{req.organization_id}-{bucket_suffix}"
         bucket = storage_client.get_bucket(bucket_name)
-        blob = bucket.blob(req.file_path)
+        blob = bucket.blob(normalized_path)
         if not blob.exists():
             return JSONResponse(status_code=404, content={"error": "File not found."})
         data = blob.download_as_bytes()
-        content_type = blob.content_type or ("application/json" if req.file_path.lower().endswith(".json") else "application/octet-stream")
+        content_type = blob.content_type or ("application/json" if normalized_path.lower().endswith(".json") else "application/octet-stream")
         return Response(content=data, media_type=content_type)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
@@ -205,29 +534,42 @@ def retrieve(req: RetrieveRequest):
     """Retrieve similar documents from the Pinecone vector store."""
     try:
         print("[retrieve] Start retrieval process")
+        if req.library not in ["organization", "private"]:
+            return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
+
+        if req.library == "private" and not req.user_id:
+            return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
+
+        index_name = req.organization_id
+        namespace = "organization" if req.library == "organization" else req.user_id
+
         # Check if index exists
-        if not pc.has_index(req.index_name):
-            print("[retrieve] Index name not found")
-            return JSONResponse(status_code=404, content={"error": f"Index '{req.index_name}' not found"})
-        
+        if not pc.has_index(index_name):
+            print("[retrieve] Index not found", index_name)
+            return JSONResponse(status_code=404, content={"error": f"Index '{index_name}' not found"})
+
         # Get the index
-        print(f"[retrieve] Getting index: {req.index_name}")
-        index = pc.Index(name=req.index_name)
-        
+        print(f"[retrieve] Getting index: {index_name}")
+        index = pc.Index(name=index_name)
+
+        # Build metadata filter to stay within the proper library scope
+        metadata_filter = {"library": {"$eq": req.library}}
+        if req.library == "private":
+            metadata_filter["user_id"] = {"$eq": req.user_id}
+
         # Embed the query
         print(f"[retrieve] Embedding query: {req.query}")
         query_embedding = co.embed(texts=[req.query], model=embedding_model_name).embeddings[0]
 
         # Prepare the Pinecone search query
-        print(f"[retrieve] Querying Pinecone index: {req.index_name}")
-        index = pc.Index(req.index_name)
-
+        print(f"[retrieve] Querying Pinecone index: {index_name} namespace: {namespace}")
         results = index.query(
-            namespace="__default__", # Namespaces might be the right way to handle different users
-            vector=query_embedding, 
+            namespace=namespace,
+            vector=query_embedding,
             top_k=req.top_k,
             include_metadata=True,
-            include_values=False
+            include_values=False,
+            filter=metadata_filter
         )
 
         print("[retrieve] Query completed, formatting results")
@@ -242,10 +584,11 @@ def retrieve(req: RetrieveRequest):
                 "score": match.get("score"),
                 "chunk_text": metadata.get("chunk_text", ""),
                 "category": metadata.get("category", ""),
-                "metadata": metadata # TODO: This should be removed and only keep the metadata needed not the entire object
+                "metadata": metadata # TODO: return the docs info
             })
 
         print(f"[retrieve] Returning {len(retrieved_docs)} results")
+        # TODO: Update to return source documents when ready
         return {
             "status": "success",
             "query": req.query,
