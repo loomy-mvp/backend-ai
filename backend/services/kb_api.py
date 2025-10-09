@@ -49,7 +49,7 @@ class EmbedRequest(BaseModel):
     organization_id: str
     user_id: str = None  # Only required if library is "private"
     storage_path: str | None = None
-    content_type: str
+    content_type: str | None = None
     overwrite: bool = False # Whether to overwrite existing vectors
 
 class UpsertRequest(BaseModel):
@@ -77,8 +77,8 @@ class DeleteFileRequest(BaseModel):
 class RetrieveRequest(BaseModel):
     query: str
     organization_id: str
-    library: str  # "organization" or "private"
-    user_id: str | None = None  # Required when library is "private"
+    libraries: list[str]  # e.g. ["organization", "private", "global"]
+    user_id: str | None = None  # Required when "private" is selected
     top_k: int = 5
 
 def cosine_similarity(a, b):
@@ -109,7 +109,7 @@ def chunk_document(doc_metadata: str, content: str, ) -> list:
         else:
             # Save current chunk
             chunks.append({
-                "id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
+                "chunk_id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
                 "page": doc_metadata["page"],
                 "text": current_chunk,
                 "storage_path": doc_metadata["storage_path"]
@@ -120,7 +120,7 @@ def chunk_document(doc_metadata: str, content: str, ) -> list:
             current_embedding = para_embedding
     # Add last chunk
     chunks.append({
-        "id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
+        "chunk_id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
         "page": doc_metadata["page"],
         "text": current_chunk,
         "storage_path": doc_metadata["storage_path"]
@@ -220,7 +220,11 @@ def _embed_doc(embed_request: EmbedRequest):
         index = None
 
     file_bytes = blob.download_as_bytes()
-    content_type = blob.content_type or mimetypes.guess_type(storage_path)[0]
+    content_type = (
+        embed_request.content_type # ? Need to keep?
+        or blob.content_type
+        or mimetypes.guess_type(storage_path)[0]
+    )
 
     if re.search(r"/.*-(.*)", storage_path): # .* can be changed following the document-id pattern
         doc_name = re.search(r"/.*-(.*)", storage_path).group(1)
@@ -372,6 +376,7 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
             organization_id=upload_data['organization_id'],
             user_id=upload_data['user_id'] if upload_data['library'] == "private" else None,
             storage_path=storage_path,
+            content_type=upload_data.get("content_type"),
             overwrite=str(upload_data.get("overwrite", "false")).lower() == "true"
         )
 
@@ -581,71 +586,115 @@ def download_file(download_request: DeleteFileRequest):
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
 
+def query_index(*, index_name: str, namespace: str | None, metadata_filter: dict | None, query_embedding, top_k):
+    if not pc.has_index(index_name):
+        print(f"[retrieve] Index not found: {index_name}")
+        return []
+    index = pc.Index(name=index_name)
+    print(f"[retrieve] Querying Pinecone index: {index_name} namespace: {namespace}")
+    response = index.query(
+        namespace=namespace,
+        vector=query_embedding,
+        top_k=top_k,
+        include_metadata=True,
+        include_values=False,
+        filter=metadata_filter
+    )
+    return response.get("matches", [])
+
 @kb_router.post("/retrieve")
 def retrieve(retrieve_request: RetrieveRequest):
     """Retrieve similar documents from the Pinecone vector store."""
     try:
         print("[retrieve] Start retrieval process")
-        if retrieve_request.library not in ["organization", "private"]:
-            return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
 
-        if retrieve_request.library == "private" and not retrieve_request.user_id:
-            return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
+        requested_libraries = set(retrieve_request.libraries)
+        if not requested_libraries:
+            return JSONResponse(status_code=400, content={"error": "At least one library must be selected"})
 
-        index_name = retrieve_request.organization_id
-        namespace = "organization" if retrieve_request.library == "organization" else retrieve_request.user_id
+        allowed_libraries = {"organization", "private", "global"}
+        invalid = requested_libraries - allowed_libraries
+        if invalid:
+            return JSONResponse(status_code=400, content={"error": f"Invalid library selections: {sorted(invalid)}"})
 
-        # Check if index exists
-        if not pc.has_index(index_name):
-            print("[retrieve] Index not found", index_name)
-            return JSONResponse(status_code=404, content={"error": f"Index '{index_name}' not found"})
+        if "private" in requested_libraries and not retrieve_request.user_id:
+            return JSONResponse(status_code=400, content={"error": "user_id is required when querying the private library"})
 
-        # Get the index
-        print(f"[retrieve] Getting index: {index_name}")
-        index = pc.Index(name=index_name)
+        print(f"[retrieve] Libraries requested: {sorted(requested_libraries)}")
 
-        # Build metadata filter to stay within the proper library scope
-        metadata_filter = {"library": {"$eq": retrieve_request.library}}
-        if retrieve_request.library == "private":
-            metadata_filter["user_id"] = {"$eq": retrieve_request.user_id}
-
-        # Embed the query
+        # Embed the query once
         print(f"[retrieve] Embedding query: {retrieve_request.query}")
         query_embedding = co.embed(texts=[retrieve_request.query], model=embedding_model_name).embeddings[0]
 
-        # Prepare the Pinecone search query
-        print(f"[retrieve] Querying Pinecone index: {index_name} namespace: {namespace}")
-        results = index.query(
-            namespace=namespace,
-            vector=query_embedding,
-            top_k=retrieve_request.top_k,
-            include_metadata=True,
-            include_values=False,
-            filter=metadata_filter
-        )
+        aggregated_matches = []
 
-        print("[retrieve] Query completed, formatting results")
-        # Format results
-        matches = results.get("matches", [])
+        # Organization library
+        if "organization" in requested_libraries:
+            matches = query_index(
+                index_name=retrieve_request.organization_id,
+                namespace="organization",
+                metadata_filter={"library": {"$eq": "organization"}},
+                query_embedding=query_embedding,
+                top_k=retrieve_request.top_k
+            )
+            aggregated_matches.extend(matches)
+
+        # Private library
+        if "private" in requested_libraries:
+            matches = query_index(
+                index_name=retrieve_request.organization_id,
+                namespace=retrieve_request.user_id,
+                metadata_filter={
+                    "library": {"$eq": "private"},
+                    "user_id": {"$eq": retrieve_request.user_id},
+                },
+                query_embedding=query_embedding,
+                top_k=retrieve_request.top_k
+            )
+            aggregated_matches.extend(matches)
+
+        # Global library (separate global index, namespace optional)
+        if "global" in requested_libraries:
+            matches = query_index(
+                index_name="global",
+                namespace=None,
+                metadata_filter={"library": {"$eq": "global"}},
+                query_embedding=query_embedding,
+                top_k=retrieve_request.top_k
+            )
+            aggregated_matches.extend(matches)
+
+        if not aggregated_matches:
+            print("[retrieve] No matches found across selected libraries")
+            return {
+                "status": "success",
+                "query": retrieve_request.query,
+                "results": [],
+                "total_results": 0,
+            }
+
+        # Sort combined matches by descending score and trim to top_k / number of libraries
+        aggregated_matches.sort(key=lambda match: match.get("score", 0), reverse=True)
+        aggregated_matches = aggregated_matches[: retrieve_request.top_k // len(requested_libraries)]
+
         retrieved_docs = []
-        for match in matches:
+        for match in aggregated_matches:
             metadata = match.get("metadata", {})
             print(f"[retrieve] Match metadata: {metadata}")
             retrieved_docs.append({
-                "id": match.get("id"),
+                "chunk_id": match.get("chunk_id"),
                 "score": match.get("score"),
                 "chunk_text": metadata.get("chunk_text", ""),
-                "category": metadata.get("category", ""),
-                "metadata": metadata # TODO: return the docs info
+                "storage_path": metadata.get("storage_path", ""),
+                "metadata": metadata,
             })
 
         print(f"[retrieve] Returning {len(retrieved_docs)} results")
-        # TODO: Update to return source documents when ready
         return {
             "status": "success",
             "query": retrieve_request.query,
             "results": retrieved_docs,
-            "total_results": len(retrieved_docs)
+            "total_results": len(retrieved_docs),
         }
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
