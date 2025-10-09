@@ -550,19 +550,19 @@ def delete_file(delete_request: DeleteFileRequest):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @kb_router.post("/download-file")
-def download_file(req: DeleteFileRequest):
+def download_file(download_request: DeleteFileRequest):
     """Download a file from the user's GCS bucket and return its contents."""
     try:
-        if req.library not in ["organization", "private"]:
+        if download_request.library not in ["organization", "private"]:
             return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
 
-        if req.library == "private" and not req.user_id:
+        if download_request.library == "private" and not download_request.user_id:
             return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
 
-        bucket_suffix = "org" if req.library == "organization" else req.user_id
-        folder_prefix = "organization/" if req.library == "organization" else f"private/{req.user_id}/"
+        bucket_suffix = "org" if download_request.library == "organization" else download_request.user_id
+        folder_prefix = "organization/" if download_request.library == "organization" else f"private/{download_request.user_id}/"
 
-        storage_path = req.storage_path or req.filename
+        storage_path = download_request.storage_path or download_request.filename
         if not storage_path:
             return JSONResponse(status_code=400, content={"error": "storage_path or filename is required"})
 
@@ -570,7 +570,7 @@ def download_file(req: DeleteFileRequest):
         if not normalized_path.startswith(folder_prefix):
             normalized_path = folder_prefix + normalized_path
 
-        bucket_name = f"bucket-{req.organization_id}-{bucket_suffix}"
+        bucket_name = f"bucket-{download_request.organization_id}-{bucket_suffix}"
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(normalized_path)
         if not blob.exists():
@@ -582,18 +582,18 @@ def download_file(req: DeleteFileRequest):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @kb_router.post("/retrieve")
-def retrieve(req: RetrieveRequest):
+def retrieve(retrieve_request: RetrieveRequest):
     """Retrieve similar documents from the Pinecone vector store."""
     try:
         print("[retrieve] Start retrieval process")
-        if req.library not in ["organization", "private"]:
+        if retrieve_request.library not in ["organization", "private"]:
             return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
 
-        if req.library == "private" and not req.user_id:
+        if retrieve_request.library == "private" and not retrieve_request.user_id:
             return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
 
-        index_name = req.organization_id
-        namespace = "organization" if req.library == "organization" else req.user_id
+        index_name = retrieve_request.organization_id
+        namespace = "organization" if retrieve_request.library == "organization" else retrieve_request.user_id
 
         # Check if index exists
         if not pc.has_index(index_name):
@@ -605,20 +605,20 @@ def retrieve(req: RetrieveRequest):
         index = pc.Index(name=index_name)
 
         # Build metadata filter to stay within the proper library scope
-        metadata_filter = {"library": {"$eq": req.library}}
-        if req.library == "private":
-            metadata_filter["user_id"] = {"$eq": req.user_id}
+        metadata_filter = {"library": {"$eq": retrieve_request.library}}
+        if retrieve_request.library == "private":
+            metadata_filter["user_id"] = {"$eq": retrieve_request.user_id}
 
         # Embed the query
-        print(f"[retrieve] Embedding query: {req.query}")
-        query_embedding = co.embed(texts=[req.query], model=embedding_model_name).embeddings[0]
+        print(f"[retrieve] Embedding query: {retrieve_request.query}")
+        query_embedding = co.embed(texts=[retrieve_request.query], model=embedding_model_name).embeddings[0]
 
         # Prepare the Pinecone search query
         print(f"[retrieve] Querying Pinecone index: {index_name} namespace: {namespace}")
         results = index.query(
             namespace=namespace,
             vector=query_embedding,
-            top_k=req.top_k,
+            top_k=retrieve_request.top_k,
             include_metadata=True,
             include_values=False,
             filter=metadata_filter
@@ -643,7 +643,7 @@ def retrieve(req: RetrieveRequest):
         # TODO: Update to return source documents when ready
         return {
             "status": "success",
-            "query": req.query,
+            "query": retrieve_request.query,
             "results": retrieved_docs,
             "total_results": len(retrieved_docs)
         }
