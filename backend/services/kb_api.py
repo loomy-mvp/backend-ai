@@ -1,6 +1,4 @@
 from fastapi import FastAPI, APIRouter, UploadFile, File, Form, Response, Depends, BackgroundTasks
-import pdfplumber
-import io
 import re
 import uuid
 import json
@@ -13,10 +11,12 @@ import cohere
 from pinecone import Pinecone, ServerlessSpec, Vector
 from fastapi.responses import JSONResponse
 import os
+import mimetypes
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
 from backend.utils.auth import verify_token
+from backend.utils.document_processing import get_document_processor
 
 kb_router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -49,6 +49,7 @@ class EmbedRequest(BaseModel):
     organization_id: str
     user_id: str = None  # Only required if library is "private"
     storage_path: str | None = None
+    content_type: str
     overwrite: bool = False # Whether to overwrite existing vectors
 
 class UpsertRequest(BaseModel):
@@ -208,17 +209,6 @@ def _embed_doc(embed_request: EmbedRequest):
             "namespace": namespace,
         }
     
-    # Temporarily only support PDF documents
-    if not storage_path.lower().endswith(".pdf"):
-        return {
-            "status": "skipped",
-            "message": "Only PDF documents are currently supported",
-            "chunks": 0,
-            "vectors": [],
-            "index_name": index_name,
-            "namespace": namespace,
-        }
-
     # If vectors for this document already exist, delete them to avoid duplicates
     if pc.has_index(index_name) and embed_request.overwrite:
         try:
@@ -230,23 +220,31 @@ def _embed_doc(embed_request: EmbedRequest):
         index = None
 
     file_bytes = blob.download_as_bytes()
+    content_type = blob.content_type or mimetypes.guess_type(storage_path)[0]
+
     if re.search(r"/.*-(.*)", storage_path): # .* can be changed following the document-id pattern
         doc_name = re.search(r"/.*-(.*)", storage_path).group(1)
     else:
         doc_name = storage_path.split("/")[-1].rsplit(".", 1)[0]
 
-    chunks = []
-    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        for page_number, page in enumerate(pdf.pages, start=1):
-            page_text = page.extract_text() or ""
-            if not page_text.strip():
-                continue
-            doc_metadata = {
-                "name": doc_name,
-                "page": page_number,
-                "storage_path": storage_path,
-            }
-            chunks.extend(chunk_document(doc_metadata, page_text))
+    try:
+        processor = get_document_processor(content_type, storage_path)
+    except ValueError as exc:
+        return {
+            "status": "skipped",
+            "message": str(exc),
+            "chunks": 0,
+            "vectors": [],
+            "index_name": index_name,
+            "namespace": namespace,
+        }
+
+    chunks = processor.process(
+        file_bytes,
+        chunk_document=chunk_document,
+        storage_path=storage_path,
+        doc_name=doc_name,
+    )
 
     if not chunks:
         return {
