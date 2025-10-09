@@ -4,6 +4,7 @@ import io
 import uuid
 import json
 import numpy as np
+import httpx
 from pydantic import BaseModel
 from google.cloud import storage
 from google.oauth2 import service_account
@@ -32,6 +33,7 @@ embedding_model_name = "embed-v4.0"
 # Pinecone
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=pinecone_api_key)
+document_webhook_url = os.getenv("DOCUMENT_WEBHOOK_URL")
 
 class EmbedRequest(BaseModel):
     library: str  # "organization" or "private"
@@ -51,6 +53,7 @@ class UpsertRequest(BaseModel):
 class StorageRequest(BaseModel):
     user_id: str = Form(...),
     organization_id: str = Form(...),
+    library: str = Form(...),
     document_id: str = Form(...),
     filename: str = Form(...),
     file: UploadFile = File(...),
@@ -70,6 +73,16 @@ class RetrieveRequest(BaseModel):
     library: str  # "organization" or "private"
     user_id: str | None = None  # Required when library is "private"
     top_k: int = 5
+
+class UploadRequest(BaseModel):
+    user_id: str
+    organization_id: str
+    document_id: str
+    filename: str
+    file_content: bytes
+    library: str
+    content_type: str
+    overwrite: str | bool = "false"
 
 def cosine_similarity(a, b):
     a = np.array(a)
@@ -117,43 +130,27 @@ def chunk_document(doc_metadata: str, content: str, ) -> list:
     })
     return chunks
 
-async def process_file_storage(storage_request: StorageRequest):
-    """Background task to process file storage."""
-    file_bytes = await storage_request.file.read()
-    _store_file(
-        organization_id=storage_request.organization_id,
-        user_id=storage_request.user_id,
-        filename=storage_request.filename,
-        file_bytes=file_bytes,
-        overwrite=storage_request.overwrite,
-        library=getattr(storage_request, "library", None),
-        content_type=storage_request.content_type,
-    )
-    # If file exists and overwrite is false, we just skip the upload
+async def send_document_webhook(document_webhook_payload: dict):
+    """Send document processing status to the configured webhook."""
 
-def _store_file(
-    *,
-    organization_id: str,
-    user_id: str,
-    filename: str,
-    file_bytes: bytes,
-    overwrite: str | bool = "false",
-    library: str | None = None,
-    content_type: str | None = None,
-) -> dict:
+    if not document_webhook_url:
+        print("[webhook] DOCUMENT_WEBHOOK_URL not configured; skipping notification")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(document_webhook_url, json=document_webhook_payload)
+            response.raise_for_status()
+        print(f"[webhook] Notification sent: status={document_webhook_payload.get('status')} path={document_webhook_payload.get('storage_path')}")
+    except Exception as exc:
+        print(f"[webhook] Failed to send notification: {exc}")
+
+def _store_file(storage_request: StorageRequest) -> dict:
     """Store a file in Google Cloud Storage following library conventions."""
 
-    overwrite_flag = str(overwrite).lower() == "true"
+    overwrite_flag = str(storage_request.overwrite).lower() == "true"
 
-    # Determine bucket suffix based on library type
-    if library == "organization":
-        bucket_suffix = "org"
-    elif library == "private":
-        bucket_suffix = user_id
-    else:
-        raise ValueError("library must be 'organization' or 'private'")
-
-    bucket_name = f"bucket-{organization_id}-{bucket_suffix}"
+    bucket_name = f"bucket-{storage_request.organization_id}"
 
     try:
         bucket_obj = storage_client.get_bucket(bucket_name)
@@ -161,26 +158,26 @@ def _store_file(
         bucket_obj = storage_client.create_bucket(bucket_name)
 
     # Determine folder prefix based on library type
-    if library == "organization":
+    if storage_request.library == "organization":
         folder_prefix = "organization/"
-    elif library == "private":
-        folder_prefix = f"private/{user_id}/"
+    elif storage_request.library == "private":
+        folder_prefix = f"private/{storage_request.user_id}/"
     else:
         folder_prefix = ""
 
-    storage_path = folder_prefix + filename
+    storage_path = folder_prefix + storage_request.document_id + "-" + storage_request.filename
     blob = bucket_obj.blob(storage_path)
 
     if blob.exists() and not overwrite_flag:
         # ? Should it really return something? Check in the orchestrtor method
         return {
             "status": "skipped",
-            "filename": storage_path,
+            "storage_path": storage_path,
             "reason": "file_exists",
         }
 
-    blob.upload_from_string(file_bytes, content_type=content_type) # ! This is GCP Storage content_type, we shall use the same
-    return {"status": "uploaded", "filename": storage_path}
+    blob.upload_from_string(storage_request.file, content_type=storage_request.content_type) # ! This is GCP Storage content_type, we shall use the same
+    return {"status": "uploaded", "storage_path": storage_path}
 
 def _embed_doc(embed_request: EmbedRequest):
     """Embed a single stored document and prepare vectors for upsert."""
@@ -299,50 +296,85 @@ def _embed_doc(embed_request: EmbedRequest):
         "doc_name": doc_name,
     }
 
-def _upsert_to_vector_store(index_name: str, namespace: str, vectors: list):
+def _upsert_to_vector_store(upsert_request: UpsertRequest):
     """Internal version of upsert_to_vector_store for use within upload-doc."""
-    if not pc.has_index(index_name):
+    if not pc.has_index(upsert_request.index_name):
         pc.create_index(
-            name=index_name,
+            name=upsert_request.index_name,
             dimension=1536,
             metric="cosine",
             spec=ServerlessSpec(
                 cloud="aws",
-                region="us-east-1" # To be changed to EU
+                region="us-east-1" # TODO: To be changed to EU
             )
         )
-    index = pc.Index(name=index_name)
+    index = pc.Index(name=upsert_request.index_name)
     # Use the namespace from request, or default to None
-    index.upsert(vectors, namespace=namespace)
-    return {"status": "success", "upserted": len(vectors), "namespace": namespace}
+    index.upsert(upsert_request.vectors, namespace=upsert_request.namespace)
+    return {"status": "success", "upserted": len(upsert_request.vectors), "namespace": upsert_request.namespace}
 
-async def process_doc_upload(upload_data: dict):
+async def process_doc_upload(upload_data: UploadRequest | dict):
     """Background task to process complete document upload, embedding, and storage with file content."""
+    if isinstance(upload_data, UploadRequest):
+        upload_data = upload_data.model_dump()
     try:
         print(f"[process_doc_upload] Starting document processing for {upload_data['filename']}")
         
         # Step 1: Store the file
         print("[process_doc_upload] Step 1: Storing file")
 
-        storage_result = _store_file(
-            organization_id=upload_data["organization_id"],
+        file_bytes = upload_data.get("file_content", b"")
+        file_size = len(file_bytes)
+
+        async def notify(status: str, *, storage_path: str | None, details: dict | None = None):
+            await send_document_webhook({
+                "storage_path": storage_path,
+                "size_bytes": file_size,
+                "status": status,
+                "details": details or {}
+            })
+
+        storage_request = StorageRequest(
             user_id=upload_data["user_id"],
-            filename=upload_data["filename"],
-            file_bytes=upload_data["file_content"],
-            overwrite=upload_data.get("overwrite", "false"),
+            organization_id=upload_data["organization_id"],
             library=upload_data.get("library"),
+            document_id=upload_data.get("document_id"),
+            filename=upload_data["filename"],
+            file=upload_data["file_content"],
             content_type=upload_data.get("content_type"),
+            overwrite=upload_data.get("overwrite", "false"),
         )
-        
+
+        storage_result = _store_file(storage_request)
+        # Release large byte payload once persisted
+        upload_data["file_content"] = b""
         print(f"[process_doc_upload] Storage result: {storage_result}")
 
-        storage_path = storage_result.get("filename")
+        storage_path = storage_result.get("storage_path")
         if storage_result.get("status") == "skipped":
             print("[process_doc_upload] Storage skipped; aborting embedding and upsert")
+            await notify(
+                status="skipped",
+                storage_path=storage_path or upload_data.get("filename"),
+                details={
+                    "document_id": upload_data.get("document_id"),
+                    "library": upload_data.get("library"),
+                    "reason": storage_result.get("reason"),
+                },
+            )
             return
 
         if not storage_path:
             print("[process_doc_upload] Missing stored filename; aborting")
+            await notify(
+                "error",
+                storage_path=upload_data.get("filename"),
+                details={
+                    "document_id": upload_data.get("document_id"),
+                    "library": upload_data.get("library"),
+                    "error": "missing_storage_path",
+                },
+            )
             return
 
         # Step 2: Embed the document
@@ -358,47 +390,78 @@ async def process_doc_upload(upload_data: dict):
         embed_result = _embed_doc(embed_request)
         print(f"[process_doc_upload] Embed result: status={embed_result.get('status')} chunks={embed_result.get('chunks', 0)}")
         
+        embed_status = embed_result.get("status", "unknown")
+        if embed_status != "success":
+            await notify(
+                embed_status,
+                storage_path=storage_path,
+                # ? Do i really need details for upload?
+                details={
+                    "document_id": upload_data.get("document_id"),
+                    "library": upload_data.get("library"),
+                    "chunks": embed_result.get("chunks", 0),
+                    "message": embed_result.get("message"),
+                },
+            )
+            return
+
         # Step 3: Upsert to vector store (only if we have vectors)
         if embed_result.get("vectors") and len(embed_result["vectors"]) > 0:
             print("[process_doc_upload] Step 3: Upserting to vector store")
-            upsert_result = _upsert_to_vector_store(
+
+            upsert_request = UpsertRequest(
                 index_name=embed_result["index_name"],
                 namespace=embed_result["namespace"],
                 vectors=embed_result["vectors"]
             )
+
+            upsert_result = _upsert_to_vector_store(upsert_request)
+
             print(f"[process_doc_upload] Upsert result: upserted={upsert_result.get('upserted', 0)}")
+            await notify(
+                "document_ready",
+                storage_path=storage_path,
+                details={
+                    "document_id": upload_data.get("document_id"),
+                    "library": upload_data.get("library"),
+                    "chunks": embed_result.get("chunks", 0),
+                    "vectors_upserted": upsert_result.get("upserted", 0),
+                },
+            )
         else:
             print("[process_doc_upload] No vectors to upsert")
             upsert_result = {"status": "skipped", "reason": "no_vectors"}
-        
-        # TODO: Send webhook notification here when ready
-        # ! The send_webhook function and webhook URL configuration are not implemented yet
-        # webhook_payload = {
-        #     "document_id": upload_data['document_id'],
-        #     "filename": upload_data['filename'],
-        #     "status": "completed",
-        #     "storage": storage_result,
-        #     "embedding": {
-        #         "chunks": embed_result.get("chunks", 0),
-        #         "vectors": len(embed_result.get("vectors", []))
-        #     },
-        #     "upsert": upsert_result
-        # }
-        # await send_webhook(webhook_payload)
+            await notify(
+                "no_vectors",
+                storage_path=storage_path,
+                details={
+                    "document_id": upload_data.get("document_id"),
+                    "library": upload_data.get("library"),
+                    "chunks": embed_result.get("chunks", 0),
+                    "message": embed_result.get("message"),
+                },
+            )
+            return
         
         print(f"[process_doc_upload] Document processing completed for {upload_data['filename']}")
         
     except Exception as e:
         print(f"[process_doc_upload] Error processing document {upload_data['filename']}: {str(e)}")
-        # TODO: Send webhook notification for error when ready
-        # ! The send_webhook function and webhook URL configuration are not implemented yet
-        # webhook_payload = {
-        #     "document_id": upload_data['document_id'],
-        #     "filename": upload_data['filename'],
-        #     "status": "error",
-        #     "error": str(e)
-        # }
-        # await send_webhook(webhook_payload)
+        storage_path = locals().get("storage_path") or upload_data.get("filename")
+        details = {
+            "document_id": upload_data.get("document_id"),
+            "library": upload_data.get("library"),
+            "error": str(e),
+        }
+        size_bytes = locals().get("file_size")
+        if size_bytes is None:
+            size_bytes = len(upload_data.get("file_content", b""))
+        await send_document_webhook({
+            "storage_path": storage_path,
+            "size_bytes": size_bytes,
+            "status": "error",
+            "details": details,
+        })
 
 @kb_router.post("/upload-doc")
 async def upload_doc(
@@ -442,16 +505,16 @@ async def upload_doc(
     filename = file.filename # ? Check that this is the entire path or just the name
     
     # Create upload request object for background processing
-    upload_data = {
-        "user_id": user_id,
-        "organization_id": organization_id,
-        "document_id": document_id,
-        "filename": filename,
-        "file_content": file_content,
-        "library": library,
-        "content_type": content_type,
-        "overwrite": overwrite
-    }
+    upload_data = UploadRequest(
+        user_id=user_id,
+        organization_id=organization_id,
+        document_id=document_id,
+        filename=filename,
+        file_content=file_content,
+        library=library,
+        content_type=content_type,
+        overwrite=overwrite,
+    )
     
     # Add complete document processing to background tasks
     background_tasks.add_task(process_doc_upload, upload_data)
