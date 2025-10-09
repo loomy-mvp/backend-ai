@@ -1,6 +1,7 @@
 from fastapi import FastAPI, APIRouter, UploadFile, File, Form, Response, Depends, BackgroundTasks
 import pdfplumber
 import io
+import re
 import uuid
 import json
 import numpy as np
@@ -19,8 +20,6 @@ from backend.utils.auth import verify_token
 
 kb_router = APIRouter(dependencies=[Depends(verify_token)])
 
-# TODO: Update all the bucket, index and namespaces with user_id or organization_id to isolate data between users
-
 # Google Cloud Storage
 gcp_credentials_info = os.getenv("GCP_SERVICE_ACCOUNT_CREDENTIALS")
 gcp_credentials_info = json.loads(gcp_credentials_info)
@@ -35,21 +34,6 @@ pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=pinecone_api_key)
 document_webhook_url = os.getenv("DOCUMENT_WEBHOOK_URL")
 
-class EmbedRequest(BaseModel):
-    library: str  # "organization" or "private"
-    organization_id: str
-    user_id: str = None  # Only required if library is "private"
-    storage_path: str | None = None
-    overwrite: bool = False # Whether to overwrite existing vectors
-
-class BucketRequest(BaseModel):
-    bucket: str
-
-class UpsertRequest(BaseModel):
-    index_name: str
-    vectors: list  # list of [id, embedding]
-    namespace: str = None  # Namespace for the vectors
-
 class StorageRequest(BaseModel):
     user_id: str = Form(...),
     organization_id: str = Form(...),
@@ -60,19 +44,17 @@ class StorageRequest(BaseModel):
     content_type: str = Form(...),
     overwrite: str = Form("false")
 
-class DeleteFileRequest(BaseModel):
-    organization_id: str
+class EmbedRequest(BaseModel):
     library: str  # "organization" or "private"
+    organization_id: str
+    user_id: str = None  # Only required if library is "private"
     storage_path: str | None = None
-    filename: str | None = None
-    user_id: str | None = None  # Required when library is "private"
+    overwrite: bool = False # Whether to overwrite existing vectors
 
-class RetrieveRequest(BaseModel):
-    query: str
-    organization_id: str
-    library: str  # "organization" or "private"
-    user_id: str | None = None  # Required when library is "private"
-    top_k: int = 5
+class UpsertRequest(BaseModel):
+    index_name: str
+    vectors: list  # list of [id, embedding]
+    namespace: str = None  # Namespace for the vectors
 
 class UploadRequest(BaseModel):
     user_id: str
@@ -83,6 +65,20 @@ class UploadRequest(BaseModel):
     library: str
     content_type: str
     overwrite: str | bool = "false"
+
+class DeleteFileRequest(BaseModel):
+    organization_id: str
+    user_id: str | None = None  # Required when library is "private"
+    library: str  # "organization" or "private"
+    storage_path: str | None = None
+    filename: str | None = None
+
+class RetrieveRequest(BaseModel):
+    query: str
+    organization_id: str
+    library: str  # "organization" or "private"
+    user_id: str | None = None  # Required when library is "private"
+    top_k: int = 5
 
 def cosine_similarity(a, b):
     a = np.array(a)
@@ -169,7 +165,6 @@ def _store_file(storage_request: StorageRequest) -> dict:
     blob = bucket_obj.blob(storage_path)
 
     if blob.exists() and not overwrite_flag:
-        # ? Should it really return something? Check in the orchestrtor method
         return {
             "status": "skipped",
             "storage_path": storage_path,
@@ -195,17 +190,9 @@ def _embed_doc(embed_request: EmbedRequest):
     if embed_request.library == "private" and not embed_request.user_id:
         raise ValueError("user_id is required for private library")
 
-    # Determine bucket name and folder prefix
-    if embed_request.library == "organization":
-        bucket_suffix = "org"
-        folder_prefix = "organization/"
-        namespace = "organization"
-    else:
-        bucket_suffix = embed_request.user_id
-        folder_prefix = f"private/{embed_request.user_id}/"
-        namespace = embed_request.user_id
-
-    bucket_name = f"bucket-{embed_request.organization_id}-{bucket_suffix}"
+    # Determine bucket, namespace, and index name
+    bucket_name = f"bucket-{embed_request.organization_id}"
+    namespace = "organization" if embed_request.library == "organization" else embed_request.user_id
     index_name = embed_request.organization_id
 
     bucket = storage_client.get_bucket(bucket_name)
@@ -243,7 +230,10 @@ def _embed_doc(embed_request: EmbedRequest):
         index = None
 
     file_bytes = blob.download_as_bytes()
-    doc_name = storage_path[len(folder_prefix):] if storage_path.startswith(folder_prefix) else storage_path
+    if re.search(r"/.*-(.*)", storage_path): # .* can be changed following the document-id pattern
+        doc_name = re.search(r"/.*-(.*)", storage_path).group(1)
+    else:
+        doc_name = storage_path.split("/")[-1].rsplit(".", 1)[0]
 
     chunks = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
@@ -531,26 +521,27 @@ async def upload_doc(
     }
 
 @kb_router.post("/delete-file")
-def delete_file(req: DeleteFileRequest):
+def delete_file(delete_request: DeleteFileRequest):
     try:
-        if req.library not in ["organization", "private"]:
+        if delete_request.library not in ["organization", "private"]:
             return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
 
-        if req.library == "private" and not req.user_id:
-            return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
+        if delete_request.library == "private" and not delete_request.user_id:
+            return JSONResponse(status_code=400, content={"error": "user_id is delete_requestuired for private library"})
 
-        bucket_suffix = "org" if req.library == "organization" else req.user_id
-        folder_prefix = "organization/" if req.library == "organization" else f"private/{req.user_id}/"
+        bucket_suffix = "org" if delete_request.library == "organization" else delete_request.user_id
+        bucket_name = f"bucket-{delete_request.organization_id}-{bucket_suffix}"
+        folder_prefix = "organization/" if delete_request.library == "organization" else f"private/{delete_request.user_id}/"
 
-        storage_path = req.storage_path or req.filename
+        storage_path = delete_request.storage_path or delete_request.filename
         if not storage_path:
-            return JSONResponse(status_code=400, content={"error": "storage_path or filename is required"})
+            return JSONResponse(status_code=400, content={"error": "storage_path or filename is delete_requestuired"})
 
         normalized_path = storage_path.lstrip("/")
         if not normalized_path.startswith(folder_prefix):
             normalized_path = folder_prefix + normalized_path
 
-        bucket_name = f"bucket-{req.organization_id}-{bucket_suffix}"
+        bucket_name = f"bucket-{delete_request.organization_id}-{bucket_suffix}"
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(normalized_path)
         if blob.exists():
