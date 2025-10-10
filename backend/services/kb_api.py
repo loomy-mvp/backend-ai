@@ -271,6 +271,7 @@ def _embed_doc(embed_request: EmbedRequest):
                 "page": chunk["page"],
                 "chunk_text": chunk["text"],
                 "storage_path": chunk["storage_path"],
+                "doc_name": doc_name,
                 "library": embed_request.library,
                 "organization_id": embed_request.organization_id,
                 "user_id": embed_request.user_id if embed_request.library == "private" else None,
@@ -465,7 +466,8 @@ async def upload_doc(
     library: str = Form(...),  # "organization" or "private"
     file: UploadFile = File(...),
     content_type: str = Form(...),
-    overwrite: str = Form("false")
+    overwrite: str = Form("false"),
+    test: bool = Form(False)
 ):
     """
     Complete document upload endpoint that handles:
@@ -485,6 +487,17 @@ async def upload_doc(
         content_type: MIME type of the file
         overwrite: "true" to overwrite existing files, "false" to skip
     """
+    if test:
+        return {
+            "user_id": user_id,
+            "organization_id": organization_id,
+            "document_id": document_id,
+            "storage_path": f"test-{file.filename}",
+            "library": library,
+            "status": "test_mode",
+            "message": "Test mode - no processing performed."
+        }
+
     # Validate library type
     if library not in ["organization", "private"]:
         return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
@@ -683,10 +696,12 @@ def retrieve(retrieve_request: RetrieveRequest):
             print(f"[retrieve] Match metadata: {metadata}")
             retrieved_docs.append({
                 "chunk_id": match.get("chunk_id"),
-                "score": match.get("score"),
                 "chunk_text": metadata.get("chunk_text", ""),
-                "storage_path": metadata.get("storage_path", ""),
-                "metadata": metadata,
+                "score": match.get("score"),
+                "page": metadata.get("page"),
+                "library": metadata.get("library"),
+                "doc_name": metadata.get("doc_name", ""),
+                "storage_path": metadata.get("storage_path", "")
             })
 
         print(f"[retrieve] Returning {len(retrieved_docs)} results")

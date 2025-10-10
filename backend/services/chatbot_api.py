@@ -54,12 +54,13 @@ class ChatRequest(BaseModel):
     model: Optional[str] = get_config_value("model")
     provider: Optional[ModelProvider] = get_config_value("provider")
     max_tokens: Optional[int] = get_config_value("max_tokens")
+    test: bool = False
 
 class ChatResponse(BaseModel):
-    response: str
-    session_id: str
-    sources: List[Dict[str, Any]]
-    timestamp: datetime
+    message_id: str
+    status: str
+    content: str
+    metadata: dict
 
 class SessionInfo(BaseModel):
     session_id: str
@@ -215,7 +216,60 @@ Context:
 # API Endpoints
 @chatbot_router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Main chat endpoint with RAG functionality."""
+    """
+    Main chat endpoint with RAG functionality.
+    Response example:
+    ChatResponse(
+    message_id=str(uuid.uuid4()),
+    status="success",
+    content="Questo è un test di Loomy, il tuo collega digitale.",
+    metadata={
+                "retrieval": {
+                    "sources": [
+                        {
+                            "chunk_id": "doc1_chunk3",
+                            "chunk_text": "Loomy is a digital assistant that helps with various tasks...",
+                            "score": 0.95,
+                            "page": 5,
+                            "library": "public",
+                            "doc_name": "loomy_overview.pdf",
+                            
+                        },
+                        {
+                            "chunk_id": "doc2_chunk7",
+                            "chunk_text": "Users can access Loomy from their dashboard after login...",
+                            "score": 0.83,
+                            "page": 12,
+                            "library": "private",
+                            "doc_name": "internal_guide.pdf"
+                        }
+                    ]
+                },
+                "total_chunks_retrieved": 2
+            }
+    """
+    if request.test:
+        return ChatResponse(
+            message_id=str(uuid.uuid4()),
+            status="success",
+            content="Questo è un test di Loomy, il tuo collega digitale.",
+            metadata={
+                "retrieval": {
+                    "sources": [
+                        {
+                            "chunk_id": "doc1_chunk1",
+                            "chunk_text": "Questo è un test",
+                            "score": 0.95,
+                            "page": 5,
+                            "library": "public",
+                            "doc_name": "loomy_test.pdf",
+                            
+                        }
+                    ]
+                },
+                "total_chunks_retrieved":  1
+            }
+        )
     try:
         print("[chat] Start chat endpoint")
         # Generate session ID if not provided
