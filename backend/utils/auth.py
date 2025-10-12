@@ -8,7 +8,7 @@ load_dotenv(override=True)
 security = HTTPBearer(auto_error=False)
 
 def _expected_token() -> str | None:
-    return os.getenv("API_TOKEN") or os.getenv("LOOMY_API_TOKEN")
+    return os.getenv("AI_API_TOKEN")
 
 def verify_token(
     request: Request,
