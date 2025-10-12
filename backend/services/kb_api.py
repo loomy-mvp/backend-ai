@@ -137,8 +137,15 @@ async def send_document_webhook(document_webhook_payload: dict):
         return
 
     try:
+        webhook_token = os.getenv("WEBHOOK_TOKEN")
+        headers = {"Authorization": f"Bearer {webhook_token}"} if webhook_token else None
+
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(document_webhook_url, json=document_webhook_payload)
+            response = await client.post(
+                document_webhook_url,
+                json=document_webhook_payload,
+                headers=headers,
+            )
             response.raise_for_status()
         print(f"[webhook] Notification sent: status={document_webhook_payload.get('status')} path={document_webhook_payload.get('storage_path')}")
     except Exception as exc:
