@@ -16,6 +16,8 @@ from dotenv import load_dotenv
 load_dotenv(override=True)
 
 from backend.utils.auth import verify_token
+from backend.utils.get_config_value import get_config_value
+from backend.config.chatbot_config import EMBEDDING_CONFIG
 from backend.utils.document_processing import get_document_processor
 
 kb_router = APIRouter(dependencies=[Depends(verify_token)])
@@ -28,7 +30,7 @@ storage_client = storage.Client(credentials=gcp_service_account_credentials)
 # Cohere
 cohere_api_key = os.getenv("COHERE_API_KEY")
 co = cohere.Client(cohere_api_key)
-embedding_model_name = "embed-v4.0"
+embedding_model_name = get_config_value(config_set=EMBEDDING_CONFIG, key="model")
 # Pinecone
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=pinecone_api_key)

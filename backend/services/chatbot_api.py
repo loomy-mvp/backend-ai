@@ -20,15 +20,9 @@ load_dotenv(override=True)
 # Configuration
 KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-document_webhook_url = os.getenv("DOCUMENT_WEBHOOK_URL")
-from backend.config.chatbot_config import CHATBOT_CONFIG
-
-# Helper to get config value with fallback to default
-def get_config_value(key: str):
-    if CHATBOT_CONFIG.get(key) is not None:
-        return CHATBOT_CONFIG[key]
-    return CHATBOT_CONFIG.get(f"default_{key}")
-
+chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
+from backend.config.chatbot_config import CHATBOT_CONFIG, EMBEDDING_CONFIG
+from backend.utils.get_config_value import get_config_value
 from backend.utils.auth import verify_token
 
 chatbot_router = APIRouter(dependencies=[Depends(verify_token)])
@@ -53,12 +47,6 @@ class ChatRequest(BaseModel):
     organizationId: str
     test: bool
     message: str
-    # top_k: Optional[int] = 5
-    # system_prompt: Optional[str] = None
-    # temperature: Optional[float] = 0
-    # model: Optional[str] = get_config_value("model")
-    # provider: Optional[ModelProvider] = get_config_value("provider")
-    # max_tokens: Optional[int] = get_config_value("max_tokens")
 
 class ChatResponse(BaseModel):
     message_id: str
@@ -79,22 +67,25 @@ class DeleteSessionResponse(BaseModel):
     message: str
     session_id: str
 
-# In-memory storage for sessions
-chat_sessions: Dict[str, ConversationBufferWindowMemory] = {}
-session_metadata: Dict[str, Dict[str, Any]] = {}
+async def send_chatbot_webhook(chatbot_webhook_payload: dict):
+    """Send chatbot processing status to the configured webhook."""
 
-async def send_document_webhook(document_webhook_payload: dict):
-    """Send document processing status to the configured webhook."""
-
-    if not document_webhook_url:
-        print("[webhook] DOCUMENT_WEBHOOK_URL not configured; skipping notification")
+    if not chatbot_webhook_url:
+        print("[webhook] CHATBOT_WEBHOOK_URL not configured; skipping notification")
         return
 
     try:
+        webhook_token = os.getenv("CHATBOT_WEBHOOK_TOKEN")
+        headers = {"Authorization": f"Bearer {webhook_token}"} if webhook_token else None
+
         async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(document_webhook_url, json=document_webhook_payload)
+            response = await client.post(
+                chatbot_webhook_url,
+                json=chatbot_webhook_payload,
+                headers=headers,
+            )
             response.raise_for_status()
-        print(f"[webhook] Notification sent: status={document_webhook_payload.get('status')} path={document_webhook_payload.get('storage_path')}")
+        print(f"[webhook] Notification sent: status={chatbot_webhook_payload.get('status')} path={document_webhook_payload.get('storage_path')}")
     except Exception as exc:
         print(f"[webhook] Failed to send notification: {exc}")
 
@@ -105,7 +96,7 @@ async def retrieve_relevant_docs(query: str, index_name: str, top_k: int = 5) ->
     async with httpx.AsyncClient(timeout=60) as client:
         try:
             headers = {}
-            api_token = os.getenv("API_TOKEN") or os.getenv("LOOMY_API_TOKEN")
+            api_token = os.getenv("AI_API_TOKEN")
             if api_token:
                 headers["Authorization"] = f"Bearer {api_token}"
             response = await client.post(
@@ -145,11 +136,11 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
     }
     
     if provider is None:
-        provider = get_config_value("provider")
+        provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
     if model is None:
-        model = get_config_value("model")
+        model = get_config_value(config_set=CHATBOT_CONFIG, key="model")
     if max_tokens is None:
-        max_tokens = get_config_value("max_tokens")
+        max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens")
 
     if provider not in provider_mapping:
         raise ValueError(f"Unsupported provider: {provider}")
@@ -264,33 +255,72 @@ async def chat(request: ChatRequest):
     # RAG parameters
     user_id = request.userId
     organization_id = request.organizationId
-    top_k = get_config_value("top_k")
+    top_k = get_config_value(config_set=CHATBOT_CONFIG, key="top_k")
     index_name = str(organization_id)
     namespace = str(user_id)
 
     # LLM parameters
     system_message = None
-    temperature = get_config_value("temperature")
-    model = get_config_value("model")
-    provider = get_config_value("provider")
-    max_tokens = get_config_value("max_tokens")
-    chat_memory = get_chat_memory(conversation_id, k=10)
+    temperature = get_config_value(config_set=CHATBOT_CONFIG, key="temperature")
+    model = get_config_value(config_set=CHATBOT_CONFIG, key="model")
+    provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
+    max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens")
+    chat_memory = get_chat_memory(conversation_id, message_id, organization_id, user_id)
 
     if request.test:
-        send_document_webhook({
+        send_chatbot_webhook({
             "message_id": request.messageId,
-            "conversation_id": request.conversationId,
-            "organization_id": request.organizationId,
-            "user_id": request.userId,
-            "status": "request_received",
-            "storage_path": "test.pdf",
-        })
+            "status": "generated",
+            "content": "Per calcolare l'\''IVA al 22%, moltiplica l'\''imponibile per 0.22. Ad esempio, su 100€ l'\''IVA è 22€, per un totale di 122€.",
+            "metadata": {
+                "tokens_used": 45,
+                "processing_time_ms": 1200,
+                "total_chunks_retrieved": 2,
+                "chunks": [{
+                                "chunk_id": "doc1_chunk3",
+                                "chunk_text": "Loomy is a digital assistant that helps with various tasks...",
+                                "score": 0.95,
+                                "page": 5,
+                                "library": "public",
+                                "doc_name": "loomy_overview.pdf"
+                            },
+                            {
+                                "chunk_id": "doc2_chunk7",
+                                "chunk_text": "Users can access Loomy from their dashboard after login...",
+                                "score": 0.83,
+                                "page": 12,
+                                "library": "private",
+                                "doc_name": "internal_guide.pdf"
+                            }
+                        ]
+                }
+            })
         return ChatResponse(
             message_id=str(uuid.uuid4()),
             status="success",
             content="Questo è un test di Loomy, il tuo collega digitale.",
-            metadata={}
-        )
+            metadata={
+                "tokens_used": 45,
+                "processing_time_ms": 1200,
+                "total_chunks_retrieved": 2,
+                "chunks": [{
+                                "chunk_id": "doc1_chunk3",
+                                "chunk_text": "Loomy is a digital assistant that helps with various tasks...",
+                                "score": 0.95,
+                                "page": 5,
+                                "library": "public",
+                                "doc_name": "loomy_overview.pdf"
+                            },
+                            {
+                                "chunk_id": "doc2_chunk7",
+                                "chunk_text": "Users can access Loomy from their dashboard after login...",
+                                "score": 0.83,
+                                "page": 12,
+                                "library": "private",
+                                "doc_name": "internal_guide.pdf"
+                            }
+                        ]
+                })
     try:
         print("[chat] Start chat endpoint")
         # Retrieve relevant documents
@@ -428,12 +458,12 @@ async def get_available_providers():
     """Get list of available LLM providers."""
     return {
         "providers": [provider.value for provider in ModelProvider],
-        "provider": get_config_value("provider"),
-        "model": get_config_value("model"),
-        "max_tokens": get_config_value("max_tokens"),
-        "default_provider": CHATBOT_CONFIG["default_provider"],
-        "default_model": CHATBOT_CONFIG["default_model"],
-        "default_max_tokens": CHATBOT_CONFIG["default_max_tokens"]
+        "provider": get_config_value(config_set=CHATBOT_CONFIG, key="provider"),
+        "model": get_config_value(config_set=CHATBOT_CONFIG, key="model"),
+        "max_tokens": get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens"),
+        "default_provider": get_config_value(config_set=CHATBOT_CONFIG, key="default_provider"),
+        "default_model": get_config_value(config_set=CHATBOT_CONFIG, key="default_model"),
+        "default_max_tokens": get_config_value(config_set=CHATBOT_CONFIG, key="default_max_tokens")
     }
 
 # Standalone FastAPI app for running this module directly
