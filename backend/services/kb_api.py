@@ -488,6 +488,13 @@ async def upload_doc(
         overwrite: "true" to overwrite existing files, "false" to skip
     """
     if test:
+        send_document_webhook({
+            "storage_path": "test.pdf",
+            "size_bytes": 0,
+            "status": "document_received",
+            "details": {},
+        })
+
         return {
             "user_id": user_id,
             "organization_id": organization_id,
