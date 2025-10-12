@@ -497,7 +497,7 @@ async def upload_doc(
         overwrite: "true" to overwrite existing files, "false" to skip
     """
     if test:
-        send_document_webhook({
+        await send_document_webhook({
             "storage_path": f"test-{file.filename}",
             "size_bytes": 0,
             "status": "document_received",

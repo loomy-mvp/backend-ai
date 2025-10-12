@@ -85,7 +85,7 @@ async def send_chatbot_webhook(chatbot_webhook_payload: dict):
                 headers=headers,
             )
             response.raise_for_status()
-        print(f"[webhook] Notification sent: status={chatbot_webhook_payload.get('status')} path={document_webhook_payload.get('storage_path')}")
+        print(f"[webhook] Notification sent: status={chatbot_webhook_payload.get('status')} path={chatbot_webhook_payload.get('storage_path')}")
     except Exception as exc:
         print(f"[webhook] Failed to send notification: {exc}")
 
@@ -268,7 +268,7 @@ async def chat(request: ChatRequest):
     chat_memory = get_chat_memory(conversation_id, message_id, organization_id, user_id)
 
     if request.test:
-        send_chatbot_webhook({
+        await send_chatbot_webhook({
             "message_id": request.messageId,
             "status": "generated",
             "content": "Per calcolare l'\''IVA al 22%, moltiplica l'\''imponibile per 0.22. Ad esempio, su 100€ l'\''IVA è 22€, per un totale di 122€.",
