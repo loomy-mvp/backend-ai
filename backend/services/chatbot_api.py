@@ -20,6 +20,7 @@ load_dotenv(override=True)
 # Configuration
 KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+document_webhook_url = os.getenv("DOCUMENT_WEBHOOK_URL")
 from backend.config.chatbot_config import CHATBOT_CONFIG
 
 # Helper to get config value with fallback to default
@@ -45,16 +46,19 @@ class ChatMessage(BaseModel):
     timestamp: Optional[datetime] = None
 
 class ChatRequest(BaseModel):
+    messageId: str
+    conversationId: str
+    content: str
+    userId: str
+    organizationId: str
+    test: bool
     message: str
-    session_id: Optional[str] = None
-    index_name: str
-    top_k: Optional[int] = 5
-    system_message: Optional[str] = None
-    temperature: Optional[float] = 0
-    model: Optional[str] = get_config_value("model")
-    provider: Optional[ModelProvider] = get_config_value("provider")
-    max_tokens: Optional[int] = get_config_value("max_tokens")
-    test: bool = False
+    # top_k: Optional[int] = 5
+    # system_prompt: Optional[str] = None
+    # temperature: Optional[float] = 0
+    # model: Optional[str] = get_config_value("model")
+    # provider: Optional[ModelProvider] = get_config_value("provider")
+    # max_tokens: Optional[int] = get_config_value("max_tokens")
 
 class ChatResponse(BaseModel):
     message_id: str
@@ -75,9 +79,24 @@ class DeleteSessionResponse(BaseModel):
     message: str
     session_id: str
 
-# In-memory storage for sessions (in production, use Redis or database)
+# In-memory storage for sessions
 chat_sessions: Dict[str, ConversationBufferWindowMemory] = {}
 session_metadata: Dict[str, Dict[str, Any]] = {}
+
+async def send_document_webhook(document_webhook_payload: dict):
+    """Send document processing status to the configured webhook."""
+
+    if not document_webhook_url:
+        print("[webhook] DOCUMENT_WEBHOOK_URL not configured; skipping notification")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(document_webhook_url, json=document_webhook_payload)
+            response.raise_for_status()
+        print(f"[webhook] Notification sent: status={document_webhook_payload.get('status')} path={document_webhook_payload.get('storage_path')}")
+    except Exception as exc:
+        print(f"[webhook] Failed to send notification: {exc}")
 
 # Retrieval function from kb_api.py
 async def retrieve_relevant_docs(query: str, index_name: str, top_k: int = 5) -> List[dict]:
@@ -156,20 +175,9 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
     except Exception as e:
         raise ValueError(f"Failed to initialize LLM for provider {provider} with model {model}: {str(e)}")
 
-def get_memory(session_id: str, k: int = 10) -> ConversationBufferWindowMemory:
-    """Get or create conversation memory for a session."""
-    if session_id not in chat_sessions:
-        chat_sessions[session_id] = ConversationBufferWindowMemory(
-            k=k,
-            memory_key="chat_history",
-            return_messages=True
-        )
-        session_metadata[session_id] = {
-            "created_at": datetime.now(),
-            "message_count": 0,
-            "last_activity": datetime.now()
-        }
-    return chat_sessions[session_id]
+def get_chat_memory(conversation_id: str, message_id: str, organization_id: str, user_id: str) -> ConversationBufferWindowMemory:
+    """Get conversation memory for a conversation from the database"""
+    pass # TODO: implement
 
 def format_docs(docs: List[dict]) -> str:
     """Format retrieved documents for the prompt."""
@@ -248,43 +256,48 @@ async def chat(request: ChatRequest):
                 "total_chunks_retrieved": 2
             }
     """
+    # Message parameters
+    message_id = request.messageId
+    conversation_id = request.conversationId
+    content = request.content
+
+    # RAG parameters
+    user_id = request.userId
+    organization_id = request.organizationId
+    top_k = get_config_value("top_k")
+    index_name = str(organization_id)
+    namespace = str(user_id)
+
+    # LLM parameters
+    system_message = None
+    temperature = get_config_value("temperature")
+    model = get_config_value("model")
+    provider = get_config_value("provider")
+    max_tokens = get_config_value("max_tokens")
+    chat_memory = get_chat_memory(conversation_id, k=10)
+
     if request.test:
+        send_document_webhook({
+            "message_id": request.messageId,
+            "conversation_id": request.conversationId,
+            "organization_id": request.organizationId,
+            "user_id": request.userId,
+            "status": "request_received",
+            "storage_path": "test.pdf",
+        })
         return ChatResponse(
             message_id=str(uuid.uuid4()),
             status="success",
             content="Questo è un test di Loomy, il tuo collega digitale.",
-            metadata={
-                "retrieval": {
-                    "sources": [
-                        {
-                            "chunk_id": "doc1_chunk1",
-                            "chunk_text": "Questo è un test",
-                            "score": 0.95,
-                            "page": 5,
-                            "library": "public",
-                            "doc_name": "loomy_test.pdf",
-                            
-                        }
-                    ]
-                },
-                "total_chunks_retrieved":  1
-            }
+            metadata={}
         )
     try:
         print("[chat] Start chat endpoint")
-        # Generate session ID if not provided
-        session_id = request.session_id or str(uuid.uuid4())
-        print(f"[chat] Session ID: {session_id}")
-        
-        # Get or create memory for this session
-        memory = get_memory(session_id)
-        print("[chat] Memory retrieved")
-        
         # Retrieve relevant documents
         docs = await retrieve_relevant_docs(
             query=request.message,
-            index_name=request.index_name,
-            top_k=request.top_k
+            index_name=index_name,
+            top_k=top_k
         )
         print(f"[chat] Retrieved {len(docs)} relevant docs")
         
