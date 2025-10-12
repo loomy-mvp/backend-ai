@@ -21,7 +21,7 @@ load_dotenv(override=True)
 KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
-from backend.config.chatbot_config import CHATBOT_CONFIG, EMBEDDING_CONFIG
+from backend.config.chatbot_config import CHATBOT_CONFIG
 from backend.utils.get_config_value import get_config_value
 from backend.utils.auth import verify_token
 
@@ -75,7 +75,7 @@ async def send_chatbot_webhook(chatbot_webhook_payload: dict):
         return
 
     try:
-        webhook_token = os.getenv("CHATBOT_WEBHOOK_TOKEN")
+        webhook_token = os.getenv("WEBHOOK_TOKEN")
         headers = {"Authorization": f"Bearer {webhook_token}"} if webhook_token else None
 
         async with httpx.AsyncClient(timeout=10) as client:
