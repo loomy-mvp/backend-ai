@@ -296,7 +296,7 @@ async def chat(request: ChatRequest):
                 }
             })
         return ChatResponse(
-            message_id=str(uuid.uuid4()),
+            message_id=request.messageId,
             status="success",
             content="Questo è un test di Loomy, il tuo collega digitale.",
             metadata={
