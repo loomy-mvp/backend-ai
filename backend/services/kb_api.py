@@ -176,7 +176,7 @@ def _store_file(storage_request: StorageRequest) -> dict:
 
     if blob.exists() and not overwrite_flag:
         return {
-            "status": "skipped",
+            "status": "error",
             "storage_path": storage_path,
             "reason": "file_exists",
         }
@@ -244,7 +244,7 @@ def _embed_doc(embed_request: EmbedRequest):
         processor = get_document_processor(content_type, storage_path)
     except ValueError as exc:
         return {
-            "status": "skipped",
+            "status": "error",
             "message": str(exc),
             "chunks": 0,
             "vectors": [],
@@ -328,14 +328,6 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
         file_bytes = upload_data.get("file_content", b"")
         file_size = len(file_bytes)
 
-        async def notify(status: str, *, storage_path: str | None, details: dict | None = None):
-            await send_document_webhook({
-                "storage_path": storage_path,
-                "size_bytes": file_size,
-                "status": status,
-                "details": details or {}
-            })
-
         storage_request = StorageRequest(
             user_id=upload_data["user_id"],
             organization_id=upload_data["organization_id"],
@@ -353,30 +345,32 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
         print(f"[process_doc_upload] Storage result: {storage_result}")
 
         storage_path = storage_result.get("storage_path")
-        if storage_result.get("status") == "skipped":
-            print("[process_doc_upload] Storage skipped; aborting embedding and upsert")
-            await notify(
-                status="skipped",
-                storage_path=storage_path or upload_data.get("filename"),
-                details={
+        if storage_result.get("status") == "error": # TODO: implement SKIPPING, file existing
+            print("[process_doc_upload] Storage failed; aborting embedding and upsert")
+            await send_document_webhook({
+                "storage_path": storage_path or upload_data.get("filename"),
+                "size_bytes": file_size,
+                "status": "error",
+                "details": {
                     "document_id": upload_data.get("document_id"),
                     "library": upload_data.get("library"),
                     "reason": storage_result.get("reason"),
                 },
-            )
+            })
             return
 
         if not storage_path:
             print("[process_doc_upload] Missing stored filename; aborting")
-            await notify(
-                "error",
-                storage_path=upload_data.get("filename"),
-                details={
+            await send_document_webhook({
+                "storage_path": upload_data.get("filename"),
+                "size_bytes": file_size,
+                "status": "error",
+                "details": {
                     "document_id": upload_data.get("document_id"),
                     "library": upload_data.get("library"),
                     "error": "missing_storage_path",
                 },
-            )
+            })
             return
 
         # Step 2: Embed the document
@@ -395,17 +389,18 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
         
         embed_status = embed_result.get("status", "unknown")
         if embed_status != "success":
-            await notify(
-                embed_status,
-                storage_path=storage_path,
-                # ? Do i really need details for upload?
-                details={
+            await send_document_webhook({
+                "storage_path": storage_path,
+                "size_bytes": file_size,
+                "status": "processing", # Webhook status is different then the internal embed status
+                # ? Why to use internal status?
+                "details": {
                     "document_id": upload_data.get("document_id"),
                     "library": upload_data.get("library"),
                     "chunks": embed_result.get("chunks", 0),
-                    "message": embed_result.get("message"),
+                    "message": "Document embedding finished",
                 },
-            )
+            })
             return
 
         # Step 3: Upsert to vector store (only if we have vectors)
@@ -421,29 +416,31 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
             upsert_result = _upsert_to_vector_store(upsert_request)
 
             print(f"[process_doc_upload] Upsert result: upserted={upsert_result.get('upserted', 0)}")
-            await notify(
-                "document_ready",
-                storage_path=storage_path,
-                details={
+            await send_document_webhook({
+                "storage_path": storage_path,
+                "size_bytes": file_size,
+                "status": "ready",
+                "details": {
                     "document_id": upload_data.get("document_id"),
                     "library": upload_data.get("library"),
                     "chunks": embed_result.get("chunks", 0),
                     "vectors_upserted": upsert_result.get("upserted", 0),
                 },
-            )
+            })
         else:
             print("[process_doc_upload] No vectors to upsert")
-            upsert_result = {"status": "skipped", "reason": "no_vectors"}
-            await notify(
-                "no_vectors",
-                storage_path=storage_path,
-                details={
+            upsert_result = {"status": "error", "reason": "no_vectors"}
+            await send_document_webhook({
+                "storage_path": storage_path,
+                "size_bytes": file_size,
+                "status": "error",
+                "details": {
                     "document_id": upload_data.get("document_id"),
                     "library": upload_data.get("library"),
                     "chunks": embed_result.get("chunks", 0),
                     "message": embed_result.get("message"),
                 },
-            )
+            })
             return
         
         print(f"[process_doc_upload] Document processing completed for {upload_data['filename']}")
@@ -460,9 +457,9 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
         if size_bytes is None:
             size_bytes = len(upload_data.get("file_content", b""))
         await send_document_webhook({
+            "status": "error",
             "storage_path": storage_path,
             "size_bytes": size_bytes,
-            "status": "error",
             "details": details,
         })
 
