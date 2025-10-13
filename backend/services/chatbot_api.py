@@ -297,30 +297,10 @@ async def chat(request: ChatRequest):
             })
         return ChatResponse(
             message_id=request.messageId,
-            status="generated",
+            status="generating",
             content="Per calcolare l'IVA al 22%, moltiplica l'imponibile per 0.22. Ad esempio, su 100€ l'IVA è 22€, per un totale di 122€.",
-            metadata={
-                "tokens_used": 45,
-                "processing_time_ms": 1200,
-                "total_chunks_retrieved": 2,
-                "chunks": [{
-                                "chunk_id": "doc1_chunk3",
-                                "chunk_text": "Loomy is a digital assistant that helps with various tasks...",
-                                "score": 0.95,
-                                "page": 5,
-                                "library": "public",
-                                "doc_name": "loomy_overview.pdf"
-                            },
-                            {
-                                "chunk_id": "doc2_chunk7",
-                                "chunk_text": "Users can access Loomy from their dashboard after login...",
-                                "score": 0.83,
-                                "page": 12,
-                                "library": "private",
-                                "doc_name": "internal_guide.pdf"
-                            }
-                        ]
-                })
+            metadata={}
+        )
     try:
         print("[chat] Start chat endpoint")
         # Retrieve relevant documents
