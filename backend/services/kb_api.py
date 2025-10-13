@@ -500,7 +500,7 @@ async def upload_doc(
         await send_document_webhook({
             "storage_path": f"test-{file.filename}",
             "size_bytes": 0,
-            "status": "document_received",
+            "status": "request_received",
             "details": {},
         })
 

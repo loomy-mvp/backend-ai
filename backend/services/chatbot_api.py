@@ -219,8 +219,8 @@ async def chat(request: ChatRequest):
     Main chat endpoint with RAG functionality.
     Response example:
     ChatResponse(
-    message_id=str(uuid.uuid4()),
-    status="success",
+    message_id=request.messageId,
+    status="generated",
     content="Questo è un test di Loomy, il tuo collega digitale.",
     metadata={
                 "retrieval": {
@@ -297,7 +297,7 @@ async def chat(request: ChatRequest):
             })
         return ChatResponse(
             message_id=request.messageId,
-            status="success",
+            status="generated",
             content="Questo è un test di Loomy, il tuo collega digitale.",
             metadata={
                 "tokens_used": 45,
