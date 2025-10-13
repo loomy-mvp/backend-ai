@@ -298,7 +298,7 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             message_id=request.messageId,
             status="generating",
-            content="Per calcolare l'IVA al 22%, moltiplica l'imponibile per 0.22. Ad esempio, su 100€ l'IVA è 22€, per un totale di 122€.",
+            content=None,
             metadata={}
         )
     try:
