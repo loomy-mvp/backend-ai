@@ -217,35 +217,6 @@ Context:
 async def chat(request: ChatRequest):
     """
     Main chat endpoint with RAG functionality.
-    Response example:
-    ChatResponse(
-    message_id=request.messageId,
-    status="generated",
-    content="Questo è un test di Loomy, il tuo collega digitale.",
-    metadata={
-                "retrieval": {
-                    "sources": [
-                        {
-                            "chunk_id": "doc1_chunk3",
-                            "chunk_text": "Loomy is a digital assistant that helps with various tasks...",
-                            "score": 0.95,
-                            "page": 5,
-                            "library": "public",
-                            "doc_name": "loomy_overview.pdf",
-                            
-                        },
-                        {
-                            "chunk_id": "doc2_chunk7",
-                            "chunk_text": "Users can access Loomy from their dashboard after login...",
-                            "score": 0.83,
-                            "page": 12,
-                            "library": "private",
-                            "doc_name": "internal_guide.pdf"
-                        }
-                    ]
-                },
-                "total_chunks_retrieved": 2
-            }
     """
     # Message parameters
     message_id = request.messageId
