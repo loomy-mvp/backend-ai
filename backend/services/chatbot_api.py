@@ -269,7 +269,7 @@ async def chat(request: ChatRequest):
         return ChatResponse(
             message_id=request.messageId,
             status="generating",
-            content=None,
+            content="",
             metadata={}
         )
     try:
