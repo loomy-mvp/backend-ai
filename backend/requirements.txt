@@ -7,4 +7,8 @@ pydantic
 httpx
 python-dotenv
 pdfplumber 
-langchain 
+langchain
+aiohttp
+beautifulsoup4
+tenacity
+lxml 

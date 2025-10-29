@@ -1,0 +1,7 @@
+requests==2.31.0
+google-cloud-storage==2.14.0
+google-auth==2.25.2
+urllib3==2.1.0
+undetected-chromedriver>=3.5.4
+selenium>=4.15.0
+python-dotenv>=1.0.0

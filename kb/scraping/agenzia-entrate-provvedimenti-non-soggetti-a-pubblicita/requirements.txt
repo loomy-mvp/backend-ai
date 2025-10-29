@@ -1,0 +1,17 @@
+# Minimal requirements for Agenzia Entrate scraper
+
+# HTTP client for async requests
+aiohttp==3.9.1
+
+# HTML parsing
+beautifulsoup4==4.12.2
+lxml==4.9.3
+
+# Retry logic
+tenacity==8.2.3
+
+# Google Cloud Storage
+google-cloud-storage==2.10.0
+
+# Environment variables (optional - for local development)
+python-dotenv==1.0.0

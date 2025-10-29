@@ -1,0 +1,1 @@
+# Notariato scraper module
