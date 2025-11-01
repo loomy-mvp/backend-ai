@@ -229,6 +229,7 @@ async def chat(request: ChatRequest):
     top_k = get_config_value(config_set=CHATBOT_CONFIG, key="top_k")
     index_name = str(organization_id)
     namespace = str(user_id)
+    print(f"User ID: {user_id}, Organization ID: {organization_id}, Index Name: {index_name}, Namespace: {namespace}")
 
     # LLM parameters
     system_message = None
