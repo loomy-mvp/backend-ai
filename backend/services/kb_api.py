@@ -4,6 +4,7 @@ import uuid
 import json
 import numpy as np
 import httpx
+import logging
 from pydantic import BaseModel
 from google.cloud import storage
 from google.oauth2 import service_account
@@ -14,6 +15,13 @@ import os
 import mimetypes
 from dotenv import load_dotenv
 load_dotenv(override=True)
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 from backend.utils.auth import verify_token
 from backend.utils.get_config_value import get_config_value
@@ -322,10 +330,10 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
     if isinstance(upload_data, UploadRequest):
         upload_data = upload_data.model_dump()
     try:
-        print(f"[process_doc_upload] Starting document processing for {upload_data['filename']}")
+        logger.info(f"[process_doc_upload] Starting document processing for {upload_data['filename']}")
         
         # Step 1: Store the file
-        print("[process_doc_upload] Step 1: Storing file")
+        logger.info("[process_doc_upload] Step 1: Storing file")
 
         file_bytes = upload_data.get("file_content", b"")
         file_size = len(file_bytes)
@@ -344,11 +352,11 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
         storage_result = _store_file(storage_request)
         # Release large byte payload once persisted
         upload_data["file_content"] = b""
-        print(f"[process_doc_upload] Storage result: {storage_result}")
+        logger.info(f"[process_doc_upload] Storage result: {storage_result}")
 
         storage_path = storage_result.get("storage_path")
         if storage_result.get("status") == "error": # TODO: implement SKIPPING, file existing
-            print("[process_doc_upload] Storage failed; aborting embedding and upsert")
+            logger.warning("[process_doc_upload] Storage failed; aborting embedding and upsert")
             await send_document_webhook({
                 "storage_path": storage_path or upload_data.get("filename"),
                 "size_bytes": file_size,
@@ -362,7 +370,7 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
             return
 
         if not storage_path:
-            print("[process_doc_upload] Missing stored filename; aborting")
+            logger.error("[process_doc_upload] Missing stored filename; aborting")
             await send_document_webhook({
                 "storage_path": upload_data.get("filename"),
                 "size_bytes": file_size,
@@ -376,7 +384,7 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
             return
 
         # Step 2: Embed the document
-        print("[process_doc_upload] Step 2: Embedding document")
+        logger.info("[process_doc_upload] Step 2: Embedding document")
         embed_request = EmbedRequest(
             library=upload_data['library'],
             organization_id=upload_data['organization_id'],
@@ -387,7 +395,7 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
         )
 
         embed_result = _embed_doc(embed_request)
-        print(f"[process_doc_upload] Embed result: status={embed_result.get('status')} chunks={embed_result.get('chunks', 0)}")
+        logger.info(f"[process_doc_upload] Embed result: status={embed_result.get('status')} chunks={embed_result.get('chunks', 0)}")
         
         embed_status = embed_result.get("status", "unknown")
         if embed_status != "success":
@@ -407,7 +415,7 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
 
         # Step 3: Upsert to vector store (only if we have vectors)
         if embed_result.get("vectors") and len(embed_result["vectors"]) > 0:
-            print("[process_doc_upload] Step 3: Upserting to vector store")
+            logger.info("[process_doc_upload] Step 3: Upserting to vector store")
 
             upsert_request = UpsertRequest(
                 index_name=embed_result["index_name"],
@@ -417,7 +425,7 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
 
             upsert_result = _upsert_to_vector_store(upsert_request)
 
-            print(f"[process_doc_upload] Upsert result: upserted={upsert_result.get('upserted', 0)}")
+            logger.info(f"[process_doc_upload] Upsert result: upserted={upsert_result.get('upserted', 0)}")
             await send_document_webhook({
                 "storage_path": storage_path,
                 "size_bytes": file_size,
@@ -430,7 +438,7 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
                 },
             })
         else:
-            print("[process_doc_upload] No vectors to upsert")
+            logger.warning("[process_doc_upload] No vectors to upsert")
             upsert_result = {"status": "error", "reason": "no_vectors"}
             await send_document_webhook({
                 "storage_path": storage_path,
@@ -445,10 +453,10 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
             })
             return
         
-        print(f"[process_doc_upload] Document processing completed for {upload_data['filename']}")
+        logger.info(f"[process_doc_upload] Document processing completed for {upload_data['filename']}")
         
     except Exception as e:
-        print(f"[process_doc_upload] Error processing document {upload_data['filename']}: {str(e)}")
+        logger.error(f"[process_doc_upload] Error processing document {upload_data['filename']}: {str(e)}", exc_info=True)
         storage_path = locals().get("storage_path") or upload_data.get("filename")
         details = {
             "document_id": upload_data.get("document_id"),
@@ -513,7 +521,7 @@ async def upload_doc(
             "message": "Test mode - no processing performed."
         }
 
-    print(f"[upload_doc] File {file.filename} received for upload by user {user_id} in organization {organization_id}")
+    logger.info(f"[upload_doc] File {file.filename} received for upload by user {user_id} in organization {organization_id}")
     # Validate library type
     if library not in ["organization", "private"]:
         return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
