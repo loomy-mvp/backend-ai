@@ -181,7 +181,9 @@ def _store_file(storage_request: StorageRequest) -> dict:
             "reason": "file_exists",
         }
 
-    blob.upload_from_string(storage_request.file, content_type=storage_request.content_type) # ! This is GCP Storage content_type, we shall use the same
+    # Read file content from UploadFile object
+    file_content = storage_request.file.file.read() if hasattr(storage_request.file, 'file') else storage_request.file
+    blob.upload_from_string(file_content, content_type=storage_request.content_type) # ! This is GCP Storage content_type, we shall use the same
     return {"status": "uploaded", "storage_path": storage_path}
 
 def _embed_doc(embed_request: EmbedRequest):
