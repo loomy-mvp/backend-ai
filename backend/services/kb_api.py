@@ -511,6 +511,17 @@ async def upload_doc(
             "message": "Test mode - no processing performed."
         }
 
+    _store_file(StorageRequest(
+        user_id=user_id,
+        organization_id=organization_id,
+        library=library,
+        document_id=document_id,
+        filename=file.filename,
+        file=file,
+        content_type=content_type,
+        overwrite=overwrite,
+    ))
+    print(f"[upload_doc] File {file.filename} received for upload by user {user_id} in organization {organization_id}")
     # Validate library type
     if library not in ["organization", "private"]:
         return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
