@@ -50,7 +50,7 @@ class StorageRequest(BaseModel):
     library: str = Form(...),
     document_id: str = Form(...),
     filename: str = Form(...),
-    file: UploadFile = File(...),
+    file: UploadFile | bytes = File(...),  # Accept either UploadFile or bytes
     content_type: str = Form(...),
     overwrite: str = Form("false")
 
@@ -189,9 +189,15 @@ def _store_file(storage_request: StorageRequest) -> dict:
             "reason": "file_exists",
         }
 
-    # Read file content from UploadFile object
-    file_content = storage_request.file.file.read() if hasattr(storage_request.file, 'file') else storage_request.file
-    blob.upload_from_string(file_content, content_type=storage_request.content_type) # ! This is GCP Storage content_type, we shall use the same
+    # Read file content - handle both UploadFile and bytes
+    if isinstance(storage_request.file, bytes):
+        file_content = storage_request.file
+    elif hasattr(storage_request.file, 'file'):
+        file_content = storage_request.file.file.read()
+    else:
+        file_content = storage_request.file
+    
+    blob.upload_from_string(file_content, content_type=storage_request.content_type)
     return {"status": "uploaded", "storage_path": storage_path}
 
 def _embed_doc(embed_request: EmbedRequest):
