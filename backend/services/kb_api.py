@@ -108,13 +108,13 @@ def chunk_document(doc_metadata: str, content: str, ) -> list:
     current_embedding = co.embed(texts=[current_chunk],
                                  model=embedding_model_name,
                                  input_type="search_document",
-                                 embedding_types=["float"]).embeddings[0]
+                                 embedding_types=["float"]).embeddings.float_[0]
     for i in range(1, len(paragraphs)):
         para = paragraphs[i]
         para_embedding = co.embed(texts=[para],
                                   model=embedding_model_name,
                                   input_type="search_document",
-                                  embedding_types=["float"]).embeddings[0]
+                                  embedding_types=["float"]).embeddings.float_[0]
         sim = cosine_similarity(current_embedding, para_embedding)
         if sim >= 0.95:
             # Merge with current chunk
@@ -679,7 +679,7 @@ def retrieve(retrieve_request: RetrieveRequest):
         query_embedding = co.embed(texts=[retrieve_request.query],
                                    model=embedding_model_name,
                                    input_type="search_query",
-                                   embedding_types=["float"]).embeddings[0]
+                                   embedding_types=["float"]).embeddings.float_[0]
 
         aggregated_matches = []
 
