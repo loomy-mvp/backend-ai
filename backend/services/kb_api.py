@@ -37,7 +37,7 @@ gcp_service_account_credentials = service_account.Credentials.from_service_accou
 storage_client = storage.Client(credentials=gcp_service_account_credentials)
 # Cohere
 cohere_api_key = os.getenv("COHERE_API_KEY")
-co = cohere.Client(cohere_api_key)
+co = cohere.ClientV2(cohere_api_key)
 embedding_model_name = get_config_value(config_set=EMBEDDING_CONFIG, key="model")
 # Pinecone
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
@@ -105,10 +105,16 @@ def chunk_document(doc_metadata: str, content: str, ) -> list:
     current_chunk = paragraphs[0]
     current_chunk_texts = [current_chunk]
     # Get embedding for the first paragraph
-    current_embedding = co.embed(texts=[current_chunk], model=embedding_model_name).embeddings[0]
+    current_embedding = co.embed(texts=[current_chunk],
+                                 model=embedding_model_name,
+                                 input_type="search_document",
+                                 embedding_types=["float"]).embeddings[0]
     for i in range(1, len(paragraphs)):
         para = paragraphs[i]
-        para_embedding = co.embed(texts=[para], model=embedding_model_name).embeddings[0]
+        para_embedding = co.embed(texts=[para],
+                                  model=embedding_model_name,
+                                  input_type="search_document",
+                                  embedding_types=["float"]).embeddings[0]
         sim = cosine_similarity(current_embedding, para_embedding)
         if sim >= 0.95:
             # Merge with current chunk
@@ -286,7 +292,10 @@ def _embed_doc(embed_request: EmbedRequest):
         }
 
     texts = [chunk["text"] for chunk in chunks]
-    embeddings = co.embed(texts=texts, model=embedding_model_name).embeddings
+    embeddings = co.embed(texts=texts,
+                          model=embedding_model_name,
+                          input_type="search_document",
+                          embedding_types=["float"]).embeddings
 
     vectors = [
         Vector(
@@ -538,7 +547,7 @@ async def upload_doc(
     
     # Read file content before passing to background task
     file_content = await file.read()
-    filename = file.filename # ? Check that this is the entire path or just the name
+    filename = file.filename
     
     # Create upload request object for background processing
     upload_data = UploadRequest(
@@ -667,7 +676,10 @@ def retrieve(retrieve_request: RetrieveRequest):
 
         # Embed the query once
         print(f"[retrieve] Embedding query: {retrieve_request.query}")
-        query_embedding = co.embed(texts=[retrieve_request.query], model=embedding_model_name).embeddings[0]
+        query_embedding = co.embed(texts=[retrieve_request.query],
+                                   model=embedding_model_name,
+                                   input_type="search_query",
+                                   embedding_types=["float"]).embeddings[0]
 
         aggregated_matches = []
 
