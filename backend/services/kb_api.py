@@ -295,7 +295,7 @@ def _embed_doc(embed_request: EmbedRequest):
     embeddings = co.embed(texts=texts,
                           model=embedding_model_name,
                           input_type="search_document",
-                          embedding_types=["float"]).embeddings
+                          embedding_types=["float"]).embeddings.float_
 
     vectors = [
         Vector(
