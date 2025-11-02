@@ -299,7 +299,7 @@ def _embed_doc(embed_request: EmbedRequest):
 
     vectors = [
         Vector(
-            id=chunk["id"],
+            id=chunk["chunk_id"],
             values=embedding,
             metadata={
                 "page": chunk["page"],
