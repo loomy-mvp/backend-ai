@@ -20,6 +20,6 @@ CHATBOT_CONFIG = {
 }
 
 EMBEDDING_CONFIG = {
-    "model": '"embed-v4.0"',  # e.g., "text-embedding-3-small"
+    "model": 'embed-v4.0',  # e.g., "text-embedding-3-small"
     "provider": 'cohere',  # e.g., "openai"
 }
