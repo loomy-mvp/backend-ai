@@ -1,6 +1,7 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+from contextlib import asynccontextmanager
 import httpx
 from backend.config.prompts import NO_RAG_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
 from langchain.prompts import ChatPromptTemplate #, MessagesPlaceholder
@@ -23,7 +24,6 @@ from backend.utils.auth import verify_token
 
 # DB connection
 from backend.utils.db_utils import DBUtils
-DBUtils.initialize_pool()
 
 chatbot_router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -315,7 +315,7 @@ async def chat(request: ChatRequest):
         print("[chat] RAG chain created")
         
         # Get chat history
-        chat_history = get_chat_history(conversation_id, message_id, organization_id, user_id)
+        chat_history = get_chat_history(conversation_id)
         print(f"[chat] Chat history length: {len(chat_history)}")
         
         # Generate response (Memory persistence to DB is handled by TypeSript backend)
@@ -360,6 +360,32 @@ async def health_check():
         "timestamp": datetime.now()
     }
 
+# Lifespan context manager for standalone app
+@asynccontextmanager
+async def chatbot_lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup
+    try:
+        DBUtils.initialize_pool()
+        print("[startup] Database connection pool initialized successfully")
+    except Exception as e:
+        print(f"[startup] Warning: Failed to initialize database pool: {e}")
+        print("[startup] Application will continue, but database operations may fail")
+    
+    yield
+    
+    # Shutdown
+    try:
+        DBUtils.close_pool()
+        print("[shutdown] Database connection pool closed successfully")
+    except Exception as e:
+        print(f"[shutdown] Warning: Error closing database pool: {e}")
+
 # Standalone FastAPI app for running this module directly
-chatbot_api = FastAPI(title="Chatbot API", description="RAG-powered chatbot using LangChain", version="1.0.0")
+chatbot_api = FastAPI(
+    title="Chatbot API",
+    description="RAG-powered chatbot using LangChain",
+    version="1.0.0",
+    lifespan=chatbot_lifespan
+)
 chatbot_api.include_router(chatbot_router)
