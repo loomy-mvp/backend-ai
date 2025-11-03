@@ -72,7 +72,7 @@ class UploadRequest(BaseModel):
     organization_id: str
     document_id: str
     filename: str
-    file_content: bytes
+    file_content: UploadFile | bytes  # Accept either UploadFile or bytes
     library: str
     content_type: str
     overwrite: str | bool = "false"
@@ -495,7 +495,7 @@ async def upload_doc(
     organization_id: str = Form(...),
     document_id: str = Form(...),
     library: str = Form(...),  # "organization" or "private"
-    file: UploadFile = File(...),
+    file: UploadFile | bytes = File(...),
     content_type: str = Form(...),
     overwrite: str = Form("false"),
     test: bool = Form(False)
