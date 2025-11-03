@@ -341,7 +341,7 @@ async def chat(request: ChatRequest):
         
         return ChatResponse(
             message_id=request.messageId,
-            status="generating",
+            status="generated",
             content=response,
             metadata={"chunks": sources}
         )
