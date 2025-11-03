@@ -6,6 +6,7 @@ import numpy as np
 import httpx
 import logging
 from pydantic import BaseModel
+from typing import Any
 from google.cloud import storage
 from google.oauth2 import service_account
 import cohere
@@ -50,7 +51,7 @@ class StorageRequest(BaseModel):
     library: str = Form(...),
     document_id: str = Form(...),
     filename: str = Form(...),
-    file: UploadFile | bytes = File(...),  # Accept either UploadFile or bytes
+    file: Any,
     content_type: str = Form(...),
     overwrite: str = Form("false")
 
@@ -72,7 +73,7 @@ class UploadRequest(BaseModel):
     organization_id: str
     document_id: str
     filename: str
-    file_content: UploadFile | bytes  # Accept either UploadFile or bytes
+    file_content: Any,
     library: str
     content_type: str
     overwrite: str | bool = "false"
@@ -490,12 +491,12 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
 
 @kb_router.post("/upload-doc")
 async def upload_doc(
+    file: Any,
     background_tasks: BackgroundTasks,
     user_id: str = Form(...),
     organization_id: str = Form(...),
     document_id: str = Form(...),
     library: str = Form(...),  # "organization" or "private"
-    file: UploadFile | bytes = File(...),
     content_type: str = Form(...),
     overwrite: str = Form("false"),
     test: bool = Form(False)
