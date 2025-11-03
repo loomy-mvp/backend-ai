@@ -46,14 +46,14 @@ pc = Pinecone(api_key=pinecone_api_key)
 document_webhook_url = os.getenv("DOCUMENT_WEBHOOK_URL")
 
 class StorageRequest(BaseModel):
-    user_id: str = Form(...),
-    organization_id: str = Form(...),
-    library: str = Form(...),
-    document_id: str = Form(...),
-    filename: str = Form(...),
-    file: Any,
-    content_type: str = Form(...),
-    overwrite: str = Form("false")
+    user_id: str
+    organization_id: str
+    library: str
+    document_id: str
+    filename: str
+    file: Any
+    content_type: str
+    overwrite: str = "false"
 
 class EmbedRequest(BaseModel):
     library: str  # "organization" or "private"
@@ -73,7 +73,7 @@ class UploadRequest(BaseModel):
     organization_id: str
     document_id: str
     filename: str
-    file_content: Any,
+    file_content: Any
     library: str
     content_type: str
     overwrite: str | bool = "false"
