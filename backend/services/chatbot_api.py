@@ -42,11 +42,10 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     messageId: str
     conversationId: str
-    content: str
     userId: str
     organizationId: str
+    content: str
     test: bool
-    message: str
 
 class ChatResponse(BaseModel):
     message_id: str
@@ -90,7 +89,8 @@ async def send_chatbot_webhook(chatbot_webhook_payload: dict):
         print(f"[webhook] Failed to send notification: {exc}")
 
 # Retrieval function from kb_api.py
-async def retrieve_relevant_docs(query: str, index_name: str, top_k: int = 5) -> List[dict]:
+async def retrieve_relevant_docs(query: str, index_name: str, namespace: str, top_k: int = 5) -> List[dict]:
+    # TODO: Missing namespace support
     """Retrieve relevant documents from the vector store."""
     print("[retrieve_relevant_docs] - Starts retrieving function")
     async with httpx.AsyncClient(timeout=60) as client:
@@ -104,6 +104,7 @@ async def retrieve_relevant_docs(query: str, index_name: str, top_k: int = 5) ->
                 json={
                     "query": query,
                     "index_name": index_name,
+                    "namespace": namespace,
                     "top_k": top_k
                 },
                 headers=headers
@@ -166,7 +167,7 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
     except Exception as e:
         raise ValueError(f"Failed to initialize LLM for provider {provider} with model {model}: {str(e)}")
 
-def get_chat_memory(conversation_id: str, message_id: str, organization_id: str, user_id: str) -> ConversationBufferWindowMemory:
+def get_chat_history(conversation_id: str, message_id: str, organization_id: str, user_id: str) -> ConversationBufferWindowMemory:
     """Get conversation memory for a conversation from the database"""
     pass # TODO: implement
 
@@ -237,7 +238,10 @@ async def chat(request: ChatRequest):
     model = get_config_value(config_set=CHATBOT_CONFIG, key="model")
     provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
     max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens")
-    chat_memory = get_chat_memory(conversation_id, message_id, organization_id, user_id)
+    
+    # History
+    # TODO: Handle get history from DB
+    chat_history = get_chat_history(conversation_id, message_id, organization_id, user_id)
 
     if request.test:
         await send_chatbot_webhook({
@@ -245,16 +249,14 @@ async def chat(request: ChatRequest):
             "status": "generated",
             "content": "Per calcolare l'IVA al 22%, moltiplica l'imponibile per 0.22. Ad esempio, su 100€ l'IVA è 22€, per un totale di 122€.",
             "metadata": {
-                "tokens_used": 45,
-                "processing_time_ms": 1200,
-                "total_chunks_retrieved": 2,
                 "chunks": [{
                                 "chunk_id": "doc1_chunk3",
                                 "chunk_text": "Loomy is a digital assistant that helps with various tasks...",
                                 "score": 0.95,
                                 "page": 5,
                                 "library": "public",
-                                "doc_name": "loomy_overview.pdf"
+                                "doc_name": "loomy_overview.pdf",
+                                "storage_path": "fake/path/to/doc1_chunk3"
                             },
                             {
                                 "chunk_id": "doc2_chunk7",
@@ -262,7 +264,8 @@ async def chat(request: ChatRequest):
                                 "score": 0.83,
                                 "page": 12,
                                 "library": "private",
-                                "doc_name": "internal_guide.pdf"
+                                "doc_name": "internal_guide.pdf",
+                                "storage_path": "fake/path/to/doc2_chunk7"
                             }
                         ]
                 }
@@ -273,43 +276,46 @@ async def chat(request: ChatRequest):
             content="",
             metadata={}
         )
+
+    # RAG Chatbot workflow
     try:
         print("[chat] Start chat endpoint")
         # Retrieve relevant documents
         docs = await retrieve_relevant_docs(
-            query=request.message,
+            query=request.content,
             index_name=index_name,
+            namespace=namespace,
             top_k=top_k
         )
         print(f"[chat] Retrieved {len(docs)} relevant docs")
         
         # Format documents as context
-        context = format_docs(docs)
+        context = format_docs(docs) # TODO: Check if the format function matches the retrieve structure (Line: 739)
         print("[chat] Context formatted")
         
         # Initialize LLM
-        llm = get_llm(request.provider, request.model, request.temperature, request.max_tokens)
+        llm = get_llm(provider, model, temperature, max_tokens)
         print("[chat] LLM initialized")
         
         # Create RAG chain
-        chain = create_rag_chain(llm, request.system_message)
+        chain = create_rag_chain(llm, system_message)
         print("[chat] RAG chain created")
         
         # Get chat history
-        chat_history = memory.chat_memory.messages
         print(f"[chat] Chat history length: {len(chat_history)}")
         print(f"[chat] chat_history type: {type(chat_history)}, value: {chat_history}")
         
         # Generate response
         response = await chain.ainvoke({
             "context": context,
-            "question": request.message,
+            "question": request.content,
             "chat_history": chat_history
         })
         print("[chat] Response generated")
         
         # Update memory
-        memory.chat_memory.add_user_message(request.message)
+        # TODO: Handle memory persistence to DB
+        memory.chat_memory.add_user_message(request.content)
         memory.chat_memory.add_ai_message(response)
         print("[chat] Memory updated")
         
@@ -321,101 +327,35 @@ async def chat(request: ChatRequest):
         # Prepare sources for response
         sources = []
         for doc in docs:
-            print(doc)
             source_info = {
-                "content": doc.get("chunk_text", ""),
+                "chunk_id": doc.get("chunk_id", None),
+                "chunk_text": doc.get("chunk_text", ""),
                 "score": doc.get("score", None),
-                "metadata": doc.get("metadata", {})
+                "page": doc.get("page", None),
+                "library": doc.get("library", None),
+                "doc_name": doc.get("doc_name", None),
+                "storage_path": doc.get("storage_path", None)
             }
             sources.append(source_info)
         print(f"[chat] Returning response with {len(sources)} sources")
         
         return ChatResponse(
-            response=response,
-            session_id=session_id,
-            sources=sources,
-            timestamp=datetime.now()
+            message_id=request.messageId,
+            status="generating",
+            content=response,
+            metadata={"chunks": sources}
         )
         
     except Exception as e:
         print(f"[chat] Exception occurred: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing chat request: {str(e)}")
 
-@chatbot_router.get("/sessions", response_model=SessionListResponse)
-async def get_sessions():
-    """Get list of all chat sessions."""
-    sessions = []
-    for session_id, metadata in session_metadata.items():
-        sessions.append(SessionInfo(
-            session_id=session_id,
-            created_at=metadata["created_at"],
-            message_count=metadata["message_count"],
-            last_activity=metadata["last_activity"]
-        ))
-    
-    return SessionListResponse(sessions=sessions)
-
-@chatbot_router.get("/sessions/{session_id}/history")
-async def get_session_history(session_id: str):
-    """Get chat history for a specific session."""
-    if session_id not in chat_sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    memory = chat_sessions[session_id]
-    messages = []
-    
-    for message in memory.chat_memory.messages:
-        if isinstance(message, HumanMessage):
-            messages.append(ChatMessage(role="user", content=message.content))
-        elif isinstance(message, AIMessage):
-            messages.append(ChatMessage(role="assistant", content=message.content))
-        elif isinstance(message, SystemMessage):
-            messages.append(ChatMessage(role="system", content=message.content))
-    
-    return {"session_id": session_id, "messages": messages}
-
-@chatbot_router.delete("/sessions/{session_id}", response_model=DeleteSessionResponse)
-async def delete_session(session_id: str):
-    """Delete a specific chat session."""
-    if session_id not in chat_sessions:
-        raise HTTPException(status_code=404, detail="Session not found")
-    
-    del chat_sessions[session_id]
-    del session_metadata[session_id]
-    
-    return DeleteSessionResponse(
-        message="Session deleted successfully",
-        session_id=session_id
-    )
-
-@chatbot_router.delete("/sessions")
-async def clear_all_sessions():
-    """Clear all chat sessions."""
-    chat_sessions.clear()
-    session_metadata.clear()
-    
-    return {"message": "All sessions cleared successfully"}
-
 @chatbot_router.get("/health")
 async def health_check():
     """Health check endpoint."""
     return {
         "status": "healthy",
-        "timestamp": datetime.now(),
-        "active_sessions": len(chat_sessions)
-    }
-
-@chatbot_router.get("/providers")
-async def get_available_providers():
-    """Get list of available LLM providers."""
-    return {
-        "providers": [provider.value for provider in ModelProvider],
-        "provider": get_config_value(config_set=CHATBOT_CONFIG, key="provider"),
-        "model": get_config_value(config_set=CHATBOT_CONFIG, key="model"),
-        "max_tokens": get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens"),
-        "default_provider": get_config_value(config_set=CHATBOT_CONFIG, key="default_provider"),
-        "default_model": get_config_value(config_set=CHATBOT_CONFIG, key="default_model"),
-        "default_max_tokens": get_config_value(config_set=CHATBOT_CONFIG, key="default_max_tokens")
+        "timestamp": datetime.now()
     }
 
 # Standalone FastAPI app for running this module directly

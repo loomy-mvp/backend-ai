@@ -87,8 +87,8 @@ class DeleteFileRequest(BaseModel):
 class RetrieveRequest(BaseModel):
     query: str
     organization_id: str
-    libraries: list[str]  # e.g. ["organization", "private", "global"]
     user_id: str | None = None  # Required when "private" is selected
+    libraries: list[str]  # e.g. ["organization", "private", "global"]
     top_k: int = 5
 
 def cosine_similarity(a, b):
