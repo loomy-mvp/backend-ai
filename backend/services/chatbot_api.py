@@ -2,19 +2,15 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import httpx
-from langchain.schema import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain.memory import ConversationBufferWindowMemory
-from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from backend.config.prompts import NO_RAG_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
+from langchain.prompts import ChatPromptTemplate #, MessagesPlaceholder
 from langchain.schema.runnable import RunnablePassthrough
 from langchain.schema.output_parser import StrOutputParser
-# LLM providers are now loaded dynamically in get_llm function
-import uuid
 from datetime import datetime
 import os
 from enum import Enum
-from dotenv import load_dotenv
-
 # Load environment variables from .env file
+from dotenv import load_dotenv
 load_dotenv(override=True)
 
 # Configuration
@@ -24,6 +20,10 @@ chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
 from backend.config.chatbot_config import CHATBOT_CONFIG
 from backend.utils.get_config_value import get_config_value
 from backend.utils.auth import verify_token
+
+# DB connection
+from backend.utils.db_utils import DBUtils
+DBUtils.initialize_pool()
 
 chatbot_router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -45,6 +45,7 @@ class ChatRequest(BaseModel):
     userId: str
     organizationId: str
     content: str
+    retrieve: Optional[bool] = True # ! Default to be left out
     test: bool
 
 class ChatResponse(BaseModel):
@@ -90,7 +91,6 @@ async def send_chatbot_webhook(chatbot_webhook_payload: dict):
 
 # Retrieval function from kb_api.py
 async def retrieve_relevant_docs(query: str, index_name: str, namespace: str, top_k: int = 5) -> List[dict]:
-    # TODO: Missing namespace support
     """Retrieve relevant documents from the vector store."""
     print("[retrieve_relevant_docs] - Starts retrieving function")
     async with httpx.AsyncClient(timeout=60) as client:
@@ -167,9 +167,25 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
     except Exception as e:
         raise ValueError(f"Failed to initialize LLM for provider {provider} with model {model}: {str(e)}")
 
-def get_chat_history(conversation_id: str, message_id: str, organization_id: str, user_id: str) -> ConversationBufferWindowMemory:
+def get_chat_history(conversation_id: str) -> List[Dict[str, Any]]:
     """Get conversation memory for a conversation from the database"""
-    pass # TODO: implement
+    db_results = DBUtils.execute_query(
+        "SELECT * FROM messages WHERE conversation_id = %s",
+        (conversation_id,)
+    )
+
+    messages = []
+    for msg in db_results:
+        if msg[6] != 'error':
+            message_content = {
+                "sender": msg[2],
+                "content": msg[3],
+                "metadata": msg[4]
+                # "created_at": msg[5]
+            }
+            messages.append(message_content)
+    
+    return messages
 
 def format_docs(docs: List[dict]) -> str:
     """Format retrieved documents for the prompt."""
@@ -179,29 +195,23 @@ def format_docs(docs: List[dict]) -> str:
     formatted_docs = []
     for i, doc in enumerate(docs, 1):
         content = doc.get("chunk_text", "")
-        metadata = doc.get("metadata", {})
+        source = doc.get("doc_name", "")
         
-        formatted_doc = f"Document {i}:\nContent: {content}\n" # TODO: add the source from metadata after getting the right key -- \nSource: {source}
+        formatted_doc = f"""<Document {i}>
+        |Source|: {source}
+        |Content|: {content}"""
         formatted_docs.append(formatted_doc)
     
-    return "\n---\n".join(formatted_docs)
+    return "\n----------\n".join(formatted_docs)
 
 def create_rag_chain(llm, system_message: str = None):
     """Create the RAG chain with LangChain."""
     
-    default_system_message = """You are a helpful AI assistant. Use the following context to answer the user's question. 
-If you cannot answer the question based on the context provided, say so clearly.
-Always be accurate and cite the sources when possible.
-
-Context:
-{context}"""
-    
-    system_msg = system_message or default_system_message
-    
     prompt = ChatPromptTemplate.from_messages([
-        ("system", system_msg),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("human", "{question}")
+        ("system", system_message or ""),
+        ("user", "<<<Chat history>>>\n{chat_history}\n"), # ? can use MessagesPlaceholder(variable_name="chat_history"),
+        ("user", "<<<Context>>>\n{context}\n"),
+        ("user", "<<<Prompt>>>\n{question}")
     ])
     
     chain = (
@@ -239,10 +249,6 @@ async def chat(request: ChatRequest):
     provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
     max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens")
     
-    # History
-    # TODO: Handle get history from DB
-    chat_history = get_chat_history(conversation_id, message_id, organization_id, user_id)
-
     if request.test:
         await send_chatbot_webhook({
             "message_id": request.messageId,
@@ -280,17 +286,24 @@ async def chat(request: ChatRequest):
     # RAG Chatbot workflow
     try:
         print("[chat] Start chat endpoint")
-        # Retrieve relevant documents
-        docs = await retrieve_relevant_docs(
-            query=content,
-            index_name=index_name,
-            namespace=namespace,
-            top_k=top_k
-        )
-        print(f"[chat] Retrieved {len(docs)} relevant docs")
+        # If no retrieval, set system message to not use context
+        if request.retrieve is False:
+            docs = []
+            system_message = NO_RAG_SYSTEM_PROMPT
+            print("[chat] Retrieval disabled; using NO_RAG_SYSTEM_PROMPT")
+        else:
+            # Retrieve relevant documents
+            system_message = RAG_SYSTEM_PROMPT
+            docs = await retrieve_relevant_docs(
+                query=content,
+                index_name=index_name,
+                namespace=namespace,
+                top_k=top_k
+            )
+            print(f"[chat] Retrieved {len(docs)} relevant docs")
         
         # Format documents as context
-        context = format_docs(docs) # TODO: Check if the format function matches the retrieve structure (Line: 739)
+        context = format_docs(docs)
         print("[chat] Context formatted")
         
         # Initialize LLM
@@ -302,27 +315,16 @@ async def chat(request: ChatRequest):
         print("[chat] RAG chain created")
         
         # Get chat history
+        chat_history = get_chat_history(conversation_id, message_id, organization_id, user_id)
         print(f"[chat] Chat history length: {len(chat_history)}")
-        print(f"[chat] chat_history type: {type(chat_history)}, value: {chat_history}")
         
-        # Generate response
+        # Generate response (Memory persistence to DB is handled by TypeSript backend)
         response = await chain.ainvoke({
             "context": context,
             "question": content,
             "chat_history": chat_history
         })
         print("[chat] Response generated")
-        
-        # Update memory
-        # TODO: Handle memory persistence to DB
-        memory.chat_memory.add_user_message(content)
-        memory.chat_memory.add_ai_message(response)
-        print("[chat] Memory updated")
-        
-        # Update session metadata
-        session_metadata[session_id]["message_count"] += 1
-        session_metadata[session_id]["last_activity"] = datetime.now()
-        print("[chat] Session metadata updated")
         
         # Prepare sources for response
         sources = []
