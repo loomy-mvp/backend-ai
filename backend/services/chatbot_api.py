@@ -282,7 +282,7 @@ async def chat(request: ChatRequest):
         print("[chat] Start chat endpoint")
         # Retrieve relevant documents
         docs = await retrieve_relevant_docs(
-            query=request.content,
+            query=content,
             index_name=index_name,
             namespace=namespace,
             top_k=top_k
@@ -308,14 +308,14 @@ async def chat(request: ChatRequest):
         # Generate response
         response = await chain.ainvoke({
             "context": context,
-            "question": request.content,
+            "question": content,
             "chat_history": chat_history
         })
         print("[chat] Response generated")
         
         # Update memory
         # TODO: Handle memory persistence to DB
-        memory.chat_memory.add_user_message(request.content)
+        memory.chat_memory.add_user_message(content)
         memory.chat_memory.add_ai_message(response)
         print("[chat] Memory updated")
         
