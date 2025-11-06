@@ -44,7 +44,7 @@ class ChatMessage(BaseModel):
     timestamp: Optional[datetime] = None
 
 class ChatRequest(BaseModel):
-    # messageId: str
+    messageId: str
     conversationId: str
     userId: str
     organizationId: str
@@ -217,7 +217,7 @@ async def chat(request: ChatRequest):
     Main chat endpoint with RAG functionality.
     """
     # Message parameters
-    # message_id = request.messageId
+    message_id = request.messageId
     conversation_id = request.conversationId
     content = request.content
 
@@ -239,7 +239,7 @@ async def chat(request: ChatRequest):
     
     if request.test:
         await send_chatbot_webhook({
-            "message_id": request.messageId,
+            "message_id": message_id,
             "status": "generated",
             "content": "Per calcolare l'IVA al 22%, moltiplica l'imponibile per 0.22. Ad esempio, su 100€ l'IVA è 22€, per un totale di 122€.",
             "metadata": {
@@ -265,7 +265,7 @@ async def chat(request: ChatRequest):
                 }
             })
         return ChatResponse(
-            message_id=request.messageId,
+            message_id=message_id,
             status="generating",
             content="",
             metadata={}
@@ -331,7 +331,7 @@ async def chat(request: ChatRequest):
         print(f"[chat] Returning response with {len(sources)} sources")
         
         return ChatResponse(
-            message_id=request.messageId,
+            message_id=message_id,
             status="generated",
             content=response,
             metadata={"chunks": sources}
