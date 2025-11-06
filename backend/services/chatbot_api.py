@@ -14,6 +14,10 @@ from enum import Enum
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
+# Retriever
+from backend.services.retrieve import Retriever 
+retriever = Retriever()
+
 # Configuration
 KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -40,10 +44,11 @@ class ChatMessage(BaseModel):
     timestamp: Optional[datetime] = None
 
 class ChatRequest(BaseModel):
-    messageId: str
+    # messageId: str
     conversationId: str
     userId: str
     organizationId: str
+    libraries: List[str] # e.g. ["organization", "private", "global"]
     content: str
     retrieve: Optional[bool] = True # ! Default to be left out
     test: bool
@@ -54,18 +59,12 @@ class ChatResponse(BaseModel):
     content: str
     metadata: dict
 
-class SessionInfo(BaseModel):
-    session_id: str
-    created_at: datetime
-    message_count: int
-    last_activity: datetime
-
-class SessionListResponse(BaseModel):
-    sessions: List[SessionInfo]
-
-class DeleteSessionResponse(BaseModel):
-    message: str
-    session_id: str
+class RetrieveRequest(BaseModel):
+    query: str
+    index_name: str
+    namespace: str | None = None  # Required when "private" is selected
+    libraries: list[str]  # e.g. ["organization", "private", "global"]
+    top_k: int = 5
 
 async def send_chatbot_webhook(chatbot_webhook_payload: dict):
     """Send chatbot processing status to the configured webhook."""
@@ -90,38 +89,26 @@ async def send_chatbot_webhook(chatbot_webhook_payload: dict):
         print(f"[webhook] Failed to send notification: {exc}")
 
 # Retrieval function from kb_api.py
-async def retrieve_relevant_docs(query: str, index_name: str, namespace: str, top_k: int = 5) -> List[dict]:
+def retrieve_relevant_docs(query: str, index_name: str, namespace: str, libraries: list, top_k: int = 5) -> List[dict]:
     """Retrieve relevant documents from the vector store."""
     print("[retrieve_relevant_docs] - Starts retrieving function")
-    async with httpx.AsyncClient(timeout=60) as client:
-        try:
-            headers = {}
-            api_token = os.getenv("AI_API_TOKEN")
-            if api_token:
-                headers["Authorization"] = f"Bearer {api_token}"
-            response = await client.post(
-                f"{KB_API_BASE_URL}/retrieve",
-                json={
-                    "query": query,
-                    "index_name": index_name,
-                    "namespace": namespace,
-                    "top_k": top_k
-                },
-                headers=headers
-            )
-            print("[retrieve_relevant_docs] - Post request made")
-        except Exception as e:
-            print(f"[retrieve_relevant_docs] - Exception type: {type(e)}")
-            print(f"[retrieve_relevant_docs] - Exception repr: {repr(e)}")
-            print(f"[retrieve_relevant_docs] - Exception str: {str(e)}")
-            raise
-        if response.status_code != 200:
-            print("[retrieve_relevant_docs] - Failed to retrieve")
-            raise HTTPException(status_code=response.status_code, detail="Failed to retrieve documents")
-        
-        data = response.json()
-        print(data.get("results", []))
-        return data.get("results", [])
+    try:
+        retrieve_request = {
+            "query": query,
+            "index_name": index_name,
+            "namespace": namespace,
+            "libraries": libraries,
+            "top_k": top_k
+        }
+        retrieval = retriever.retrieve(RetrieveRequest(**retrieve_request))
+    except Exception as e:
+        print(f"[retrieve_relevant_docs] - Exception type: {type(e)}")
+        print(f"[retrieve_relevant_docs] - Exception repr: {repr(e)}")
+        print(f"[retrieve_relevant_docs] - Exception str: {str(e)}")
+        raise
+
+    print(retrieval.get("results", []))
+    return retrieval.get("results", [])
 
 # LLM initialization functions
 def get_llm(provider: ModelProvider = None, model: str = None, temperature: float = 0, max_tokens: int = None):
@@ -230,7 +217,7 @@ async def chat(request: ChatRequest):
     Main chat endpoint with RAG functionality.
     """
     # Message parameters
-    message_id = request.messageId
+    # message_id = request.messageId
     conversation_id = request.conversationId
     content = request.content
 
@@ -240,6 +227,7 @@ async def chat(request: ChatRequest):
     top_k = get_config_value(config_set=CHATBOT_CONFIG, key="top_k")
     index_name = str(organization_id)
     namespace = str(user_id)
+    libraries = request.libraries
     print(f"User ID: {user_id}, Organization ID: {organization_id}, Index Name: {index_name}, Namespace: {namespace}")
 
     # LLM parameters
@@ -294,10 +282,11 @@ async def chat(request: ChatRequest):
         else:
             # Retrieve relevant documents
             system_message = RAG_SYSTEM_PROMPT
-            docs = await retrieve_relevant_docs(
+            docs = retrieve_relevant_docs(
                 query=content,
                 index_name=index_name,
                 namespace=namespace,
+                libraries=libraries,
                 top_k=top_k
             )
             print(f"[chat] Retrieved {len(docs)} relevant docs")
