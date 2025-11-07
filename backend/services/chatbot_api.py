@@ -49,7 +49,7 @@ class ChatRequest(BaseModel):
     conversationId: str
     userId: str
     organizationId: str
-    libraries: Optional[List[str]] # e.g. ["organization", "private", "global"]
+    libraries: Optional[List[str]] = ["organization", "private", "global"]
     message: str
     promptTemplate: Optional[str] = None
     retrieve: Optional[bool] = True # ! Default to be left out
@@ -231,9 +231,6 @@ async def chat(request: ChatRequest):
     index_name = str(organization_id)
     namespace = str(user_id)
     libraries = request.libraries
-    # temporary fix
-    if not libraries:
-        libraries = ["organization", "private", "global"]
 
     # LLM parameters
     system_message = None
