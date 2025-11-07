@@ -231,6 +231,9 @@ async def chat(request: ChatRequest):
     index_name = str(organization_id)
     namespace = str(user_id)
     libraries = request.libraries
+    # temporary fix
+    if not libraries:
+        libraries = ["organization", "private", "global"]
 
     # LLM parameters
     system_message = None
