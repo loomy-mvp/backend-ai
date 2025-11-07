@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from .services.kb_api import kb_api, kb_router
-from .services.chatbot_api import chatbot_api, chatbot_router
+from .services.kb_api import kb_router
+from .services.chatbot_api import chatbot_router
 from .utils.db_utils import DBUtils
 
 @asynccontextmanager

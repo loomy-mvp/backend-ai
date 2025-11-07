@@ -638,7 +638,3 @@ def download_file(download_request: DeleteFileRequest):
         return Response(content=data, media_type=content_type)
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
-
-# Standalone FastAPI app for running this module directly
-kb_api = FastAPI(title="KB API", description="Knowledge Base API", version="1.0.0")
-kb_api.include_router(kb_router)
