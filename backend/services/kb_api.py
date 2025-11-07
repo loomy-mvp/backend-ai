@@ -31,11 +31,16 @@ from backend.utils.document_processing import get_document_processor
 
 kb_router = APIRouter(dependencies=[Depends(verify_token)])
 
-# Google Cloud Storage
+# Google Cloud Storage - handle both explicit credentials and default (Cloud Run)
 gcp_credentials_info = os.getenv("GCP_SERVICE_ACCOUNT_CREDENTIALS")
-gcp_credentials_info = json.loads(gcp_credentials_info)
-gcp_service_account_credentials = service_account.Credentials.from_service_account_info(gcp_credentials_info)
-storage_client = storage.Client(credentials=gcp_service_account_credentials)
+if gcp_credentials_info:
+    gcp_credentials_info = json.loads(gcp_credentials_info)
+    gcp_service_account_credentials = service_account.Credentials.from_service_account_info(gcp_credentials_info)
+    storage_client = storage.Client(credentials=gcp_service_account_credentials)
+else:
+    # Use default credentials (e.g., Cloud Run service account)
+    storage_client = storage.Client()
+
 # Cohere
 cohere_api_key = os.getenv("COHERE_API_KEY")
 co = cohere.ClientV2(cohere_api_key)
