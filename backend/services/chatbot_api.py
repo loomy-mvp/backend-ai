@@ -16,7 +16,9 @@ load_dotenv(override=True)
 
 # Retriever
 from backend.services.retrieve import Retriever 
+from backend.services.write import Writer
 retriever = Retriever()
+writer = Writer()
 
 # Configuration
 KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
@@ -48,8 +50,9 @@ class ChatRequest(BaseModel):
     conversationId: str
     userId: str
     organizationId: str
-    libraries: List[str] # e.g. ["organization", "private", "global"]
-    content: str
+    libraries: Optional[List[str]] # e.g. ["organization", "private", "global"]
+    message: str
+    promptTemplate: Optional[str] = None
     retrieve: Optional[bool] = True # ! Default to be left out
     test: bool
 
@@ -219,7 +222,8 @@ async def chat(request: ChatRequest):
     # Message parameters
     message_id = request.messageId
     conversation_id = request.conversationId
-    content = request.content
+    message = request.message
+    prompt_template = request.promptTemplate
 
     # RAG parameters
     user_id = request.userId
@@ -228,7 +232,6 @@ async def chat(request: ChatRequest):
     index_name = str(organization_id)
     namespace = str(user_id)
     libraries = request.libraries
-    print(f"User ID: {user_id}, Organization ID: {organization_id}, Index Name: {index_name}, Namespace: {namespace}")
 
     # LLM parameters
     system_message = None
@@ -236,6 +239,10 @@ async def chat(request: ChatRequest):
     model = get_config_value(config_set=CHATBOT_CONFIG, key="model")
     provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
     max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens")
+    
+    # Initialize LLM
+    llm = get_llm(provider, model, temperature, max_tokens)
+    print("[chat] LLM initialized")
     
     if request.test:
         await send_chatbot_webhook({
@@ -271,6 +278,10 @@ async def chat(request: ChatRequest):
             metadata={}
         )
 
+    # Prompt template workflow
+    if prompt_template:
+        pass  # TODO: Implement custom prompt template handling
+
     # RAG Chatbot workflow
     try:
         print("[chat] Start chat endpoint")
@@ -283,7 +294,7 @@ async def chat(request: ChatRequest):
             # Retrieve relevant documents
             system_message = RAG_SYSTEM_PROMPT
             docs = retrieve_relevant_docs(
-                query=content,
+                query=message,
                 index_name=index_name,
                 namespace=namespace,
                 libraries=libraries,
@@ -294,10 +305,6 @@ async def chat(request: ChatRequest):
         # Format documents as context
         context = format_docs(docs)
         print("[chat] Context formatted")
-        
-        # Initialize LLM
-        llm = get_llm(provider, model, temperature, max_tokens)
-        print("[chat] LLM initialized")
         
         # Create RAG chain
         chain = create_rag_chain(llm, system_message)
@@ -310,7 +317,7 @@ async def chat(request: ChatRequest):
         # Generate response (Memory persistence to DB is handled by TypeSript backend)
         response = await chain.ainvoke({
             "context": context,
-            "question": content,
+            "question": message,
             "chat_history": chat_history
         })
         print("[chat] Response generated")
