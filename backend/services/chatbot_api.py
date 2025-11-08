@@ -336,6 +336,16 @@ async def chat(request: ChatRequest):
             sources.append(source_info)
         print(f"[chat] Returning response with {len(sources)} sources")
         
+        # Send webhook notification
+        await send_chatbot_webhook({
+            "message_id": message_id,
+            "status": "generated",
+            "content": response,
+            "metadata": {
+                "chunks": sources
+            }
+        })
+        
         return ChatResponse(
             message_id=message_id,
             status="generated",
