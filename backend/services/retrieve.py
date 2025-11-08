@@ -29,7 +29,7 @@ class RetrieveRequest(BaseModel):
     query: str
     index_name: str
     namespace: str | None = None  # Required when "private" is selected
-    libraries: list[str]  # e.g. ["organization", "private", "global"]
+    libraries: list[str]  # e.g. ["organization", "private", "public"]
     top_k: int = 5
 
 class Retriever:
@@ -61,7 +61,7 @@ class Retriever:
             if not requested_libraries:
                 raise ValueError("At least one library must be selected")
 
-            allowed_libraries = {"organization", "private", "global"}
+            allowed_libraries = {"organization", "private", "public"}
             invalid = requested_libraries - allowed_libraries
             if invalid:
                 raise ValueError(f"Invalid library selections: {sorted(invalid)}")
@@ -105,12 +105,12 @@ class Retriever:
                 )
                 aggregated_matches.extend(matches)
 
-            # Global library (separate global index, namespace optional)
-            if "global" in requested_libraries:
+            # public library (separate public index, namespace optional)
+            if "public" in requested_libraries:
                 matches = self.query_index(
-                    index_name="global",
+                    index_name="public",
                     namespace=None,
-                    metadata_filter={"library": {"$eq": "global"}},
+                    metadata_filter={"library": {"$eq": "public"}},
                     query_embedding=query_embedding,
                     top_k=retrieve_request.top_k
                 )
