@@ -152,9 +152,9 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
     if not storage_path:
         raise ValueError("storage_path is required to embed a document")
     
-    if embed_request.library not in ["organization", "private"]:
-        raise ValueError("library must be 'organization' or 'private'")
-    
+    if embed_request.library not in ["organization", "private", "public"]:
+        raise ValueError("library must be 'organization', 'private', or 'public'")
+
     if embed_request.library == "private" and not embed_request.user_id:
         raise ValueError("user_id is required for private library")
     

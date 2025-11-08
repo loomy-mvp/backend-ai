@@ -30,9 +30,9 @@ class BatchEmbedder:
         self.library = library
         self.user_id = user_id
         
-        if library not in ["organization", "private"]:
-            raise ValueError("library must be 'organization' or 'private'")
-        
+        if library not in ["organization", "private", "public"]:
+            raise ValueError("library must be 'organization', 'private', or 'public'")
+
         if library == "private" and not user_id:
             raise ValueError("user_id is required for private library")
         
