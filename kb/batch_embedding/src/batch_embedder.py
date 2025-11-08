@@ -134,6 +134,11 @@ class BatchEmbedder:
                 logger.info(f"  Embedding document...")
                 embed_result = _embed_doc(embed_request)
                 
+                if embed_result.get('status') == 'skipped':
+                    logger.info(f"  Skipped (already embedded)")
+                    stats['skipped'] += 1
+                    continue
+                
                 if embed_result.get('status') != 'success':
                     error_msg = embed_result.get('message', 'Unknown error')
                     

@@ -10,6 +10,7 @@ import re
 import mimetypes
 import uuid
 import unicodedata
+import gc
 from typing import Any, Dict
 from pathlib import Path
 import sys
@@ -181,6 +182,33 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
             "namespace": namespace,
         }
     
+    # Check if document is already embedded when overwrite=False
+    if not embed_request.overwrite and pc.has_index(index_name):
+        try:
+            index = pc.Index(name=index_name)
+            # Query for any vector with this storage_path
+            query_result = index.query(
+                vector=[0] * 1536,  # Dummy vector just to check metadata
+                filter={"storage_path": {"$eq": storage_path}},
+                top_k=1,
+                namespace=namespace,
+                include_metadata=True
+            )
+            
+            if query_result.matches and len(query_result.matches) > 0:
+                logger.info(f"Document {storage_path} already embedded in index, skipping")
+                return {
+                    "status": "skipped",
+                    "message": f"Document already embedded (overwrite=False)",
+                    "chunks": 0,
+                    "vectors": [],
+                    "index_name": index_name,
+                    "namespace": namespace,
+                }
+        except Exception as e:
+            logger.warning(f"Unable to check if document exists in index: {e}")
+            # Continue with embedding if check fails
+    
     if pc.has_index(index_name) and embed_request.overwrite:
         try:
             index = pc.Index(name=index_name)
@@ -219,6 +247,10 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
         doc_name=doc_name,
     )
     
+    # Free up memory immediately after processing
+    del file_bytes
+    del processor
+    
     if not chunks:
         return {
             "status": "error",
@@ -237,6 +269,9 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
         embedding_types=["float"]
     ).embeddings.float_
     
+    # Free up memory after embedding
+    del texts
+    
     vectors = [
         Vector(
             id=chunk["chunk_id"],
@@ -252,9 +287,17 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
         for chunk, embedding in zip(chunks, embeddings)
     ]
     
+    # Store counts before deleting
+    num_chunks = len(chunks)
+    
+    # Free up memory after creating vectors
+    del chunks
+    del embeddings
+    gc.collect()  # Force garbage collection
+    
     return {
         "status": "success",
-        "chunks": len(chunks),
+        "chunks": num_chunks,
         "vectors": vectors,
         "index_name": index_name,
         "namespace": namespace,

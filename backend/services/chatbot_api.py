@@ -49,7 +49,7 @@ class ChatRequest(BaseModel):
     conversationId: str
     userId: str
     organizationId: str
-    libraries: Optional[List[str]] = ["organization", "private", "global"]
+    libraries: Optional[List[str]] = ["organization", "private", "public"]
     message: str
     promptTemplate: Optional[str] = None
     retrieve: Optional[bool] = True # ! Default to be left out
@@ -65,7 +65,7 @@ class RetrieveRequest(BaseModel):
     query: str
     index_name: str
     namespace: str | None = None  # Required when "private" is selected
-    libraries: list[str]  # e.g. ["organization", "private", "global"]
+    libraries: list[str]  # e.g. ["organization", "private", "public"]
     top_k: int = 5
 
 async def send_chatbot_webhook(chatbot_webhook_payload: dict):

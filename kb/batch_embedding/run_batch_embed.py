@@ -111,8 +111,8 @@ if __name__ == "__main__":
         "--library",
         type=str,
         required=True,
-        choices=['organization', 'private'],
-        help="Library type: organization or private"
+        choices=['organization', 'private', 'public'],
+        help="Library type: organization, private, or public"
     )
     parser.add_argument(
         "--user-id",
