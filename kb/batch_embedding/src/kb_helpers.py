@@ -141,7 +141,6 @@ class EmbedRequest(BaseModel):
 class UpsertRequest(BaseModel):
     index_name: str
     vectors: list
-    namespace: str = None
 
 
 def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
@@ -161,13 +160,10 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
     # For batch embedding of public documents:
     # - Bucket name comes from the request (e.g., "loomy-public-documents")
     # - Index is always "public"
-    # - Namespace is the first folder in the path (e.g., "circolari" from "circolari/2024/doc.pdf")
+    # - No namespace used
     bucket_name = embed_request.bucket_name
     index_name = "public"
-    
-    # Extract namespace from storage path (first folder)
-    path_parts = storage_path.split('/')
-    namespace = path_parts[0] if len(path_parts) > 0 else "default"
+    namespace = None
     
     bucket = storage_client.get_bucket(bucket_name)
     blob = bucket.blob(storage_path)
@@ -191,7 +187,6 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
                 vector=[0] * 1536,  # Dummy vector just to check metadata
                 filter={"storage_path": {"$eq": storage_path}},
                 top_k=1,
-                namespace=namespace,
                 include_metadata=True
             )
             
@@ -212,7 +207,7 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
     if pc.has_index(index_name) and embed_request.overwrite:
         try:
             index = pc.Index(name=index_name)
-            index.delete(namespace=namespace, filter={"storage_path": {"$eq": storage_path}})
+            index.delete(filter={"storage_path": {"$eq": storage_path}})
         except Exception as e:
             logger.warning(f"Unable to delete existing vectors for {storage_path}: {e}")
     
@@ -282,6 +277,7 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
                 "storage_path": storage_path,
                 "doc_name": doc_name,
                 "library": embed_request.library,
+                "source": storage_path.split("/")[0],
             }
         )
         for chunk, embedding in zip(chunks, embeddings)
@@ -325,8 +321,7 @@ def _upsert_to_vector_store(upsert_request: UpsertRequest) -> Dict[str, Any]:
         index = pc.Index(name=upsert_request.index_name)
         
         upsert_response = index.upsert(
-            vectors=upsert_request.vectors,
-            namespace=upsert_request.namespace
+            vectors=upsert_request.vectors
         )
         
         return {
