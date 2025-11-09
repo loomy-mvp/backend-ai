@@ -308,12 +308,24 @@ def _embed_doc(embed_request: EmbedRequest):
             "namespace": namespace,
         }
 
-    chunks = processor.process(
-        file_bytes,
-        chunk_document=chunk_document,
-        storage_path=storage_path,
-        doc_name=doc_name,
-    )
+    try:
+        chunks = processor.process(
+            file_bytes,
+            chunk_document=chunk_document,
+            storage_path=storage_path,
+            doc_name=doc_name,
+        )
+    except ValueError as e:
+        # CID corruption detected - skip this document
+        print(f"[_embed_doc] Skipping document {storage_path}: {e}")
+        return {
+            "status": "skipped",
+            "message": f"Document skipped due to CID corruption: {str(e)}",
+            "chunks": 0,
+            "vectors": [],
+            "index_name": index_name,
+            "namespace": namespace,
+        }
 
     if not chunks:
         return {
