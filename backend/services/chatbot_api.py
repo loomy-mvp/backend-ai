@@ -2,13 +2,8 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import httpx
-from backend.config.prompts import NO_RAG_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT
-from langchain.prompts import ChatPromptTemplate #, MessagesPlaceholder
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
 from datetime import datetime
 import os
-from enum import Enum
 # Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -24,19 +19,17 @@ KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
 from backend.config.chatbot_config import CHATBOT_CONFIG
+from backend.config.prompts import NO_RAG_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT, CHAT_PROMPT_TEMPLATE
 from backend.utils.get_config_value import get_config_value
+from backend.utils.get_llm import get_llm
 from backend.utils.auth import verify_token
+from backend.utils.create_chain import create_chain
 
-# DB connection
-from backend.utils.db_utils import DBUtils
+# Retrieval judge
+from backend.utils.retrieval_judge import RetrievalJudge
+retrieval_judge = RetrievalJudge()
 
 chatbot_router = APIRouter(dependencies=[Depends(verify_token)])
-
-# Enums for model providers
-class ModelProvider(str, Enum):
-    OPENAI = "openai"
-    ANTHROPIC = "anthropic"
-    GOOGLE = "google"
 
 # Pydantic models
 class ChatMessage(BaseModel):
@@ -52,7 +45,6 @@ class ChatRequest(BaseModel):
     libraries: Optional[List[str]] = ["organization", "private", "public"]
     message: str
     promptTemplate: Optional[str] = None
-    retrieve: Optional[bool] = True # ! Default to be left out
     test: bool
 
 class ChatResponse(BaseModel):
@@ -112,74 +104,10 @@ def retrieve_relevant_docs(query: str, index_name: str, namespace: str, librarie
     print(retrieval.get("results", []))
     return retrieval.get("results", [])
 
-# LLM initialization functions
-def get_llm(provider: ModelProvider = None, model: str = None, temperature: float = 0, max_tokens: int = None):
-    """Initialize LLM based on provider and model using config, with fallback to defaults."""
-    import importlib
-    
-    # Mapping of providers to their LangChain modules and classes
-    provider_mapping = {
-        ModelProvider.OPENAI: ("langchain_openai", "ChatOpenAI", "max_tokens"),
-        ModelProvider.ANTHROPIC: ("langchain_anthropic", "ChatAnthropic", "max_tokens"),
-        ModelProvider.GOOGLE: ("langchain_google_vertexai", "ChatVertexAI", "max_output_tokens"),
-        # Add more providers as needed
-    }
-    
-    if provider is None:
-        provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
-    if model is None:
-        model = get_config_value(config_set=CHATBOT_CONFIG, key="model")
-    if max_tokens is None:
-        max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens")
-
-    if provider not in provider_mapping:
-        raise ValueError(f"Unsupported provider: {provider}")
-    
-    module_name, class_name, max_tokens_param = provider_mapping[provider]
-    
-    try:
-        # Dynamically import the module and get the class
-        module = importlib.import_module(module_name)
-        llm_class = getattr(module, class_name)
-        
-        # Prepare kwargs with the correct parameter name for max_tokens
-        kwargs = {
-            "model": model,
-            "temperature": temperature,
-            max_tokens_param: max_tokens
-        }
-        
-        return llm_class(**kwargs)
-        
-    except ImportError as e:
-        raise ValueError(f"Failed to import {module_name}: {str(e)}. Make sure the package is installed.")
-    except Exception as e:
-        raise ValueError(f"Failed to initialize LLM for provider {provider} with model {model}: {str(e)}")
-
-def get_chat_history(conversation_id: str) -> List[Dict[str, Any]]:
-    """Get conversation memory for a conversation from the database"""
-    db_results = DBUtils.execute_query(
-        "SELECT * FROM messages WHERE conversation_id = %s",
-        (conversation_id,)
-    )
-
-    messages = []
-    for msg in db_results:
-        if msg[6] != 'error':
-            message_content = {
-                "sender": msg[2],
-                "content": msg[3],
-                "metadata": msg[4]
-                # "created_at": msg[5]
-            }
-            messages.append(message_content)
-    
-    return messages
-
 def format_docs(docs: List[dict]) -> str:
     """Format retrieved documents for the prompt."""
     if not docs:
-        return "No relevant documents found."
+        return ""
     
     formatted_docs = []
     for i, doc in enumerate(docs, 1):
@@ -192,25 +120,6 @@ def format_docs(docs: List[dict]) -> str:
         formatted_docs.append(formatted_doc)
     
     return "\n----------\n".join(formatted_docs)
-
-def create_rag_chain(llm, system_message: str = None):
-    """Create the RAG chain with LangChain."""
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_message or ""),
-        ("user", "<<<Chat history>>>\n{chat_history}\n"), # ? can use MessagesPlaceholder(variable_name="chat_history"),
-        ("user", "<<<Context>>>\n{context}\n"),
-        ("user", "<<<Prompt>>>\n{question}")
-    ])
-    
-    chain = (
-        RunnablePassthrough()
-        | prompt
-        | llm
-        | StrOutputParser()
-    )
-    
-    return chain
 
 # API Endpoints
 @chatbot_router.post("/chat", response_model=ChatResponse)
@@ -243,6 +152,10 @@ async def chat(request: ChatRequest):
     llm = get_llm(provider, model, temperature, max_tokens)
     print("[chat] LLM initialized")
     
+    # Get chat history
+    chat_history = get_chat_history(conversation_id)
+    print(f"[chat] Chat history length: {len(chat_history)}")
+
     if request.test:
         await send_chatbot_webhook({
             "message_id": message_id,
@@ -281,11 +194,14 @@ async def chat(request: ChatRequest):
     if prompt_template:
         pass  # TODO: Implement custom prompt template handling
 
+    # Decide whether to retrieve documents or go plain LLM
+    retrieve = retrieval_judge.judge_retrieval(chat_history, message)
+
     # RAG Chatbot workflow
     try:
         print("[chat] Start chat endpoint")
         # If no retrieval, set system message to not use context
-        if request.retrieve is False:
+        if retrieve is False:
             docs = []
             system_message = NO_RAG_SYSTEM_PROMPT
             print("[chat] Retrieval disabled; using NO_RAG_SYSTEM_PROMPT")
@@ -306,12 +222,14 @@ async def chat(request: ChatRequest):
         print("[chat] Context formatted")
         
         # Create RAG chain
-        chain = create_rag_chain(llm, system_message)
-        print("[chat] RAG chain created")
-        
-        # Get chat history
-        chat_history = get_chat_history(conversation_id)
-        print(f"[chat] Chat history length: {len(chat_history)}")
+        prompt = CHAT_PROMPT_TEMPLATE.format(
+            system_prompt=system_message,
+            chat_history=chat_history,
+            context=context,
+            question=message
+        )
+        chain = create_chain(llm=llm, prompt_template=prompt)
+        print(f"""[chat] {'RAG' if retrieve else 'Plain'} chain created""")
         
         # Generate response (Memory persistence to DB is handled by TypeSript backend)
         response = await chain.ainvoke({

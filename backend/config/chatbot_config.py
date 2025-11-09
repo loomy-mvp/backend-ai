@@ -2,24 +2,21 @@
 
 CHATBOT_CONFIG = {
     # Explicit values (used if set, otherwise fallback to defaults below)
-    "model": 'claude-sonnet-4-20250514',  # e.g., "gpt-5-nano"
-    "provider": 'anthropic',  # e.g., "openai"
-    "max_tokens": 20000,  # e.g., 1000
+    "model": 'gpt-5-2025-08-07',
+    "provider": 'openai', # e.g., "openai", "anthropic", "google"
+    "max_tokens": 20000,
     "temperature": 0.0,
-    "top_k": 5,  # Number of relevant documents to retrieve
-    "system_prompt": "", # TODO: Add a default system prompt
-
-
-    # Defaults (used if above are not set)
-    "default_model": "gpt-5-nano",
-    "default_provider": "openai",
-    "default_max_tokens": 1000,
-    "default_temperature": 0.0,
-    "default_top_k": 5,
-    "default_system_prompt": "",
+    "top_k": 5  # Number of relevant documents to retrieve from each kb
 }
 
 EMBEDDING_CONFIG = {
     "model": 'embed-v4.0',  # e.g., "text-embedding-3-small"
     "provider": 'cohere',  # e.g., "openai"
+}
+
+RETRIEVAL_JUDGE_CONFIG = {
+    "model": 'gpt-5-nano-2025-08-07',
+    "provider": 'openai',
+    "max_tokens": 1000,
+    "temperature": 0.0
 }
