@@ -27,7 +27,7 @@ Possible answers are: {{"retrieve": true}} or {{"retrieve": false}}.
 """
 ).strip()
 
-RETRIEVAL_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
+RETRIEVAL_JUDGE_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
         ("system", RETRIEVAL_JUDGE_SYSTEM_PROMPT),
         ("user", "<<<Query>>>\n{message}\n"),
         ("user", "<<<Chat history>>>\n{chat_history}\n"),
