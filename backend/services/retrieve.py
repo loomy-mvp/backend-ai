@@ -14,7 +14,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-from backend.utils.get_config_value import get_config_value
+from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.config.chatbot_config import EMBEDDING_CONFIG
 
 # Cohere

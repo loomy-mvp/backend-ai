@@ -25,9 +25,9 @@ import numpy as np
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
-from backend.utils.get_config_value import get_config_value
+from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.config.chatbot_config import EMBEDDING_CONFIG
-from backend.utils.document_processing import get_document_processor
+from backend.utils.ai_workflow_utils.document_processing import get_document_processor
 
 logger = logging.getLogger(__name__)
 

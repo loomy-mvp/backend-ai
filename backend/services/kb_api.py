@@ -25,9 +25,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from backend.utils.auth import verify_token
-from backend.utils.get_config_value import get_config_value
+from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.config.chatbot_config import EMBEDDING_CONFIG
-from backend.utils.document_processing import get_document_processor
+from backend.utils.ai_workflow_utils.document_processing import get_document_processor
 
 kb_router = APIRouter(dependencies=[Depends(verify_token)])
 

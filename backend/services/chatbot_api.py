@@ -20,13 +20,14 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
 from backend.config.chatbot_config import CHATBOT_CONFIG
 from backend.config.prompts import NO_RAG_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT, CHAT_PROMPT_TEMPLATE
-from backend.utils.get_config_value import get_config_value
-from backend.utils.get_llm import get_llm
+from backend.utils.ai_workflow_utils.get_config_value import get_config_value
+from backend.utils.ai_workflow_utils.get_llm import get_llm
 from backend.utils.auth import verify_token
-from backend.utils.create_chain import create_chain
+from backend.utils.ai_workflow_utils.create_chain import create_chain
+from backend.utils.ai_workflow_utils.get_chat_history import get_chat_history
 
 # Retrieval judge
-from backend.utils.retrieval_judge import RetrievalJudge
+from backend.utils.ai_workflow_utils.retrieval_judge import RetrievalJudge
 retrieval_judge = RetrievalJudge()
 
 chatbot_router = APIRouter(dependencies=[Depends(verify_token)])

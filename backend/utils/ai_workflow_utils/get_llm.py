@@ -1,5 +1,5 @@
 from backend.config.chatbot_config import CHATBOT_CONFIG
-from backend.utils.get_config_value import get_config_value
+from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from enum import Enum
 
 # Enums for model providers

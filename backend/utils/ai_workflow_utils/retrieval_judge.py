@@ -2,8 +2,8 @@ from typing import Any, Dict
 import json
 import re
 from pydantic import BaseModel
-from utils.get_llm import get_llm
-from utils.create_chain import create_chain
+from backend.utils.ai_workflow_utils.get_llm import get_llm
+from backend.utils.ai_workflow_utils.create_chain import create_chain
 from backend.config.chatbot_config import RETRIEVAL_JUDGE_CONFIG
 from backend.config.prompts import RETRIEVAL_JUDGE_PROMPT
 

@@ -16,7 +16,7 @@ from pinecone import Pinecone
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from backend.config.chatbot_config import EMBEDDING_CONFIG
-from backend.utils.get_config_value import get_config_value
+from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from .kb_helpers import _embed_doc, _upsert_to_vector_store, EmbedRequest, UpsertRequest
 
 logger = logging.getLogger(__name__)
