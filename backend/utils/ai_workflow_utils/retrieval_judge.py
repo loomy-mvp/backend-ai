@@ -68,12 +68,7 @@ class RetrievalJudge:
         RetrievalDecision pydantic model to guarantee a boolean return value.
         """
 
-        prompt = RETRIEVAL_JUDGE_PROMPT_TEMPLATE.format(
-            message=message,
-            chat_history=chat_history
-        )
-
-        chain = create_chain(llm=self.llm, prompt=prompt)
+        chain = create_chain(llm=self.llm, prompt_template=RETRIEVAL_JUDGE_PROMPT_TEMPLATE)
         raw_response = chain.invoke({
             "message": message,
             "chat_history": chat_history

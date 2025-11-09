@@ -223,17 +223,12 @@ async def chat(request: ChatRequest):
         print("[chat] Context formatted")
         
         # Create RAG chain
-        prompt = CHAT_PROMPT_TEMPLATE.format(
-            system_prompt=system_message,
-            chat_history=chat_history,
-            context=context,
-            question=message
-        )
-        chain = create_chain(llm=llm, prompt=prompt)
+        chain = create_chain(llm=llm, prompt_template=CHAT_PROMPT_TEMPLATE)
         print(f"""[chat] {'RAG' if retrieve else 'Plain'} chain created""")
         
         # Generate response (Memory persistence to DB is handled by TypeSript backend)
         response = await chain.ainvoke({
+            "system_prompt": system_message,
             "context": context,
             "question": message,
             "chat_history": chat_history
