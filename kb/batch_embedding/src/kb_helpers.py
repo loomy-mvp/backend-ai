@@ -66,8 +66,14 @@ def sanitize_to_ascii(text: str) -> str:
     return text
 
 
-def chunk_document(doc_metadata: dict, content: str) -> list:
-    """Split document content into semantically-merged chunks using a similarity threshold of 0.95."""
+def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.70, max_tokens: int = 1000, min_tokens: int = 150) -> list:
+    """
+    Split document content into semantically-merged chunks.
+    Chunks are split when:
+    - Token count is at least min_tokens (default 150) AND
+      (Similarity falls below max_similarity (default 0.70) OR token count exceeds max_tokens (default 1000))
+    Token count is estimated as word_count / 1.33
+    """
     paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
     if not paragraphs:
         return []
@@ -78,6 +84,12 @@ def chunk_document(doc_metadata: dict, content: str) -> list:
     
     # Sanitize doc name for ASCII-only IDs
     safe_doc_name = sanitize_to_ascii(doc_metadata['name'])
+    
+    # Helper function to estimate token count
+    def estimate_tokens(text: str) -> int:
+        """Estimate tokens as word_count / 1.33"""
+        word_count = len(text.split())
+        return int(word_count / 1.33)
     
     # Get embedding for the first paragraph
     current_embedding = co.embed(
@@ -98,14 +110,30 @@ def chunk_document(doc_metadata: dict, content: str) -> list:
         
         sim = cosine_similarity(current_embedding, para_embedding)
         
-        if sim >= 0.95:
+        # Check if merging would exceed token limit
+        potential_chunk = current_chunk + "\n\n" + para
+        potential_tokens = estimate_tokens(potential_chunk)
+        current_tokens = estimate_tokens(current_chunk)
+        
+        # Decision logic:
+        # 1. If below min_tokens, always merge (unless exceeding max_tokens)
+        # 2. If at or above min_tokens, split if similarity is low OR max_tokens would be exceeded
+        should_merge = False
+        if current_tokens < min_tokens:
+            # Below minimum, keep merging unless we'd exceed max
+            should_merge = potential_tokens <= max_tokens
+        else:
+            # At or above minimum, apply similarity and max token checks
+            should_merge = sim >= max_similarity and potential_tokens <= max_tokens
+        
+        if should_merge:
             # Merge with current chunk
-            current_chunk += "\n\n" + para
+            current_chunk = potential_chunk
             current_chunk_texts.append(para)
             # Update current embedding as the mean of embeddings
             current_embedding = (current_embedding * len(current_chunk_texts) + para_embedding) / (len(current_chunk_texts) + 1)
         else:
-            # Save current chunk
+            # Save current chunk (split due to low similarity or token limit exceeded)
             chunks.append({
                 "chunk_id": f"{safe_doc_name}-{str(uuid.uuid4())}",
                 "page": doc_metadata["page"],
