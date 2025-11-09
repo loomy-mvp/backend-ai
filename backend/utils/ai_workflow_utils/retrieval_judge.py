@@ -73,7 +73,7 @@ class RetrievalJudge:
             chat_history=chat_history
         )
 
-        chain = create_chain(llm=self.llm, prompt_template=prompt)
+        chain = create_chain(llm=self.llm, prompt=prompt)
         raw_response = chain.invoke({
             "message": message,
             "chat_history": chat_history

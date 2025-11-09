@@ -229,7 +229,7 @@ async def chat(request: ChatRequest):
             context=context,
             question=message
         )
-        chain = create_chain(llm=llm, prompt_template=prompt)
+        chain = create_chain(llm=llm, prompt=prompt)
         print(f"""[chat] {'RAG' if retrieve else 'Plain'} chain created""")
         
         # Generate response (Memory persistence to DB is handled by TypeSript backend)
