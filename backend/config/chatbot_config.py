@@ -5,9 +5,9 @@ CHATBOT_CONFIG = {
     "model": 'gpt-5-2025-08-07',
     "provider": 'openai', # e.g., "openai", "anthropic", "google"
     "max_tokens": 20000,
-    "temperature": 0.0,
     "top_k": 5  # Number of relevant documents to retrieve from each kb
 }
+CHATBOT_CONFIG["temperature"] = 0.0 if not "gpt-5" in CHATBOT_CONFIG['model'] else 1
 
 EMBEDDING_CONFIG = {
     "model": 'embed-v4.0',  # e.g., "text-embedding-3-small"
@@ -17,6 +17,6 @@ EMBEDDING_CONFIG = {
 RETRIEVAL_JUDGE_CONFIG = {
     "model": 'gpt-5-nano-2025-08-07',
     "provider": 'openai',
-    "max_tokens": 1000,
-    "temperature": 0.0
+    "max_tokens": 1000
 }
+RETRIEVAL_JUDGE_CONFIG["temperature"] = 0.0 if not "gpt-5" in RETRIEVAL_JUDGE_CONFIG['model'] else 1
