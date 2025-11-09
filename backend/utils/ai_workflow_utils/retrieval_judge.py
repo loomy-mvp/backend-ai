@@ -6,6 +6,9 @@ from backend.utils.ai_workflow_utils.get_llm import get_llm
 from backend.utils.ai_workflow_utils.create_chain import create_chain
 from backend.config.chatbot_config import RETRIEVAL_JUDGE_CONFIG
 from backend.config.prompts import RETRIEVAL_JUDGE_PROMPT_TEMPLATE
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class RetrievalDecision(BaseModel):
     """Pydantic model that enforces the 'retrieve' field as a boolean.
@@ -73,8 +76,9 @@ class RetrievalJudge:
             "message": message,
             "chat_history": chat_history
         })
-
+        logger.info(f"[retrieval_judge] Raw LLM response: {raw_response}")
         parsed = self._parse_llm_response(raw_response)
+        logger.info(f"[retrieval_judge] Parsed LLM response: {parsed}")
 
         # Use pydantic to coerce/validate the value to a bool. This will raise a ValidationError if the result cannot be interpreted as a boolean.
         decision = RetrievalDecision.model_validate(parsed)
