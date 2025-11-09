@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from backend.utils.ai_workflow_utils.get_llm import get_llm
 from backend.utils.ai_workflow_utils.create_chain import create_chain
 from backend.config.chatbot_config import RETRIEVAL_JUDGE_CONFIG
-from backend.config.prompts import RETRIEVAL_JUDGE_PROMPT
+from backend.config.prompts import RETRIEVAL_PROMPT_TEMPLATE
 
 class RetrievalDecision(BaseModel):
     """Pydantic model that enforces the 'retrieve' field as a boolean.
@@ -68,7 +68,7 @@ class RetrievalJudge:
         RetrievalDecision pydantic model to guarantee a boolean return value.
         """
 
-        prompt = RETRIEVAL_JUDGE_PROMPT.format(
+        prompt = RETRIEVAL_PROMPT_TEMPLATE.format(
             message=message,
             chat_history=chat_history
         )
