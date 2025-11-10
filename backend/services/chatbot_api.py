@@ -128,11 +128,11 @@ async def chat(request: ChatRequest):
     """
     Main chat endpoint with RAG functionality.
     """
+    print("[chat] Received chat request: ", request)
     # Message parameters
     message_id = request.messageId
     conversation_id = request.conversationId
     message = request.message
-    print("[chat] QUERY: ", message)
     prompt_template = request.promptTemplate
 
     # RAG parameters
