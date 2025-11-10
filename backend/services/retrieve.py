@@ -127,6 +127,7 @@ class Retriever:
 
             # Sort combined matches by descending score and trim to top_k / number of libraries
             aggregated_matches.sort(key=lambda match: match.get("score", 0), reverse=True)
+            print(f"[retrieve] top k aggregated: {retrieve_request.top_k * len(requested_libraries)}")
             aggregated_matches = aggregated_matches[: retrieve_request.top_k * len(requested_libraries)] # //
             # ! Temporary change: return 5 top_k, not divided by libraries because it's only from public
             # aggregated_matches = aggregated_matches[:5]

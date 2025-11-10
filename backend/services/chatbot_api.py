@@ -132,6 +132,7 @@ async def chat(request: ChatRequest):
     message_id = request.messageId
     conversation_id = request.conversationId
     message = request.message
+    print("[chat] QUERY: ", message)
     prompt_template = request.promptTemplate
 
     # RAG parameters
@@ -208,6 +209,7 @@ async def chat(request: ChatRequest):
             print("[chat] Retrieval disabled; using NO_RAG_SYSTEM_PROMPT")
         else:
             # Retrieve relevant documents
+            # ? Retrieve va fatto anche sulla history?
             system_message = RAG_SYSTEM_PROMPT
             docs = retrieve_relevant_docs(
                 query=message,
