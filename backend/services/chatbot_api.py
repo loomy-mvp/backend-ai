@@ -228,6 +228,13 @@ async def chat(request: ChatRequest):
         chain = create_chain(llm=llm, prompt_template=CHAT_PROMPT_TEMPLATE)
         print(f"""[chat] {'RAG' if retrieve else 'Plain'} chain created""")
         
+        print("[chat] LLM payload: ", {
+            "system_prompt": system_message,
+            "context": context,
+            "question": message,
+            "chat_history": chat_history
+        })
+
         # Generate response (Memory persistence to DB is handled by TypeSript backend)
         response = await chain.ainvoke({
             "system_prompt": system_message,
