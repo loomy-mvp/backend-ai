@@ -94,8 +94,36 @@ class PDFDocumentProcessor(DocumentProcessor):
 
 
 class TextDocumentProcessor(DocumentProcessor):
-    def process(self, *args, **kwargs):  # type: ignore[override]
-        pass
+    """Process plain text documents into chunks."""
+    
+    def process(
+        self,
+        file_bytes: bytes,
+        *,
+        chunk_document: Chunker,
+        storage_path: str,
+        doc_name: str,
+    ) -> list[Chunk]:
+        chunks: list[Chunk] = []
+        
+        # Decode text file (try UTF-8 first, fallback to latin-1)
+        try:
+            text = file_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            text = file_bytes.decode('latin-1')
+        
+        if not text.strip():
+            print(f"[TXT] Skipping empty document '{doc_name}'")
+            return chunks
+        
+        # Text files don't have pages, so we treat the whole file as page 1
+        doc_metadata = {
+            "name": doc_name,
+            "page": 1,
+            "storage_path": storage_path,
+        }
+        chunks.extend(chunk_document(doc_metadata, text))
+        return chunks
 
 
 class DocxDocumentProcessor(DocumentProcessor):

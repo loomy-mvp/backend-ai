@@ -65,13 +65,18 @@ def sanitize_to_ascii(text: str) -> str:
     text = re.sub(r'[^a-zA-Z0-9\-_.]', '_', text)
     return text
 
+# Helper function to estimate token count
+def estimate_tokens(text: str) -> int:
+    """Estimate tokens as word_count / 1.33"""
+    word_count = len(text.split()) + 1
+    return int(word_count / 1.33)
 
-def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.70, max_tokens: int = 1000, min_tokens: int = 150) -> list:
+def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.65, max_tokens: int = 1000, min_tokens: int = 150) -> list:
     """
     Split document content into semantically-merged chunks.
     Chunks are split when:
     - Token count is at least min_tokens (default 150) AND
-      (Similarity falls below max_similarity (default 0.70) OR token count exceeds max_tokens (default 1000))
+      (Similarity falls below max_similarity (default 0.65) OR token count exceeds max_tokens (default 1000))
     Token count is estimated as word_count / 1.33
     """
     paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
@@ -84,12 +89,6 @@ def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.7
     
     # Sanitize doc name for ASCII-only IDs
     safe_doc_name = sanitize_to_ascii(doc_metadata['name'])
-    
-    # Helper function to estimate token count
-    def estimate_tokens(text: str) -> int:
-        """Estimate tokens as word_count / 1.33"""
-        word_count = len(text.split())
-        return int(word_count / 1.33)
     
     # Get embedding for the first paragraph
     current_embedding = co.embed(
@@ -246,10 +245,7 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
         or mimetypes.guess_type(storage_path)[0]
     )
     
-    if re.search(r"/.*-(.*)", storage_path):
-        doc_name = re.search(r"/.*-(.*)", storage_path).group(1)
-    else:
-        doc_name = storage_path.split("/")[-1].rsplit(".", 1)[0]
+    doc_name = storage_path.split("/")[-1]
     
     try:
         processor = get_document_processor(content_type, storage_path)
@@ -297,12 +293,20 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
         }
     
     texts = [chunk["text"] for chunk in chunks]
-    embeddings = co.embed(
-        texts=texts,
-        model=embedding_model_name,
-        input_type="search_document",
-        embedding_types=["float"]
-    ).embeddings.float_
+    
+    # Cohere embed API has a limit of 96 texts per call split into batches if needed
+    batch_size = 96
+    embeddings = []
+    
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        batch_embeddings = co.embed(
+            texts=batch,
+            model=embedding_model_name,
+            input_type="search_document",
+            embedding_types=["float"]
+        ).embeddings.float_
+        embeddings.extend(batch_embeddings)
     
     # Free up memory after embedding
     del texts
