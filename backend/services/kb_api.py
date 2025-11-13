@@ -565,13 +565,7 @@ async def upload_doc(
         content_type: MIME type of the file
         overwrite: "true" to overwrite existing files, "false" to skip
     """
-    # Temp: log the file for FIL
-    logger.info(f"Type of file: {type(file)}")
-    try:
-        logger.info(f"File content: {file.read()}")
-    except Exception as e:
-        logger.error(f"Error reading file content: {e}")
-
+    
     if test:
         await send_document_webhook({
             "storage_path": f"test-{filename}",
