@@ -536,8 +536,8 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
 
 @kb_router.post("/upload-doc")
 async def upload_doc(
-    file: Any,
     background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
     user_id: str = Form(...),
     organization_id: str = Form(...),
     document_id: str = Form(...),
