@@ -541,6 +541,7 @@ async def upload_doc(
     user_id: str = Form(...),
     organization_id: str = Form(...),
     document_id: str = Form(...),
+    filename: str = Form(...),
     library: str = Form(...),  # "organization" or "private"
     content_type: str = Form(...),
     overwrite: str = Form("false"),
@@ -573,7 +574,7 @@ async def upload_doc(
 
     if test:
         await send_document_webhook({
-            "storage_path": f"test-{file.filename}",
+            "storage_path": f"test-{filename}",
             "size_bytes": 0,
             "status": "request_received",
             "details": {},
@@ -583,13 +584,13 @@ async def upload_doc(
             "user_id": user_id,
             "organization_id": organization_id,
             "document_id": document_id,
-            "storage_path": f"test-{file.filename}",
+            "storage_path": f"test-{filename}",
             "library": library,
             "status": "test_mode",
             "message": "Test mode - no processing performed."
         }
 
-    logger.info(f"[upload_doc] File {file.filename} received for upload by user {user_id} in organization {organization_id}")
+    logger.info(f"[upload_doc] File {filename} received for upload by user {user_id} in organization {organization_id}")
     # Validate library type
     if library not in ["organization", "private"]:
         return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
@@ -600,7 +601,6 @@ async def upload_doc(
     
     # Read file content before passing to background task
     file_content = await file.read()
-    filename = file.filename
     
     # Create upload request object for background processing
     upload_data = UploadRequest(
