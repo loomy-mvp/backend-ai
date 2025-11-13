@@ -565,7 +565,8 @@ async def upload_doc(
         content_type: MIME type of the file
         overwrite: "true" to overwrite existing files, "false" to skip
     """
-    
+    # Temp: log the entire payload
+    logger.info(f"Received upload request: user_id={user_id}, organization_id={organization_id}, document_id={document_id}, filename={filename}, library={library}, content_type={content_type}, overwrite={overwrite}, test={test}")
     if test:
         await send_document_webhook({
             "storage_path": f"test-{filename}",
