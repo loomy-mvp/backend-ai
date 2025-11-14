@@ -147,7 +147,7 @@ async def process_chat_request(chat_data: dict):
         top_k = chat_data["top_k"]
         index_name = chat_data["index_name"]
         namespace = chat_data["namespace"]
-        similarity_threshold = chat_data.get("similarity_threshold", 0.50) # Default to 0.50 if not provided
+        similarity_threshold = chat_data.get("similarity_threshold")  # Will use default from config if not provided
         
         # LLM parameters
         temperature = chat_data["temperature"]
