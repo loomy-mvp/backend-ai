@@ -232,7 +232,7 @@ async def chat(request: ChatRequest):
             "system_prompt": system_message,
             "context": context,
             "question": message,
-            "chat_history": chat_history
+            "chat_history": chat_history # ! LLM legge il messaggio da qui e non da message
         })
 
         # Generate response (Memory persistence to DB is handled by TypeSript backend)
@@ -264,9 +264,7 @@ async def chat(request: ChatRequest):
             "message_id": message_id,
             "status": "generated",
             "content": response,
-            "metadata": {
-                "chunks": sources
-            }
+            "metadata": {"chunks": sources}
         })
         
         return ChatResponse(
