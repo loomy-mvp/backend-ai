@@ -625,33 +625,70 @@ async def upload_doc(
 
 @kb_router.post("/delete-file")
 def delete_file(delete_request: DeleteFileRequest):
+    """Delete a file from GCS and remove all its chunks from Pinecone vector store."""
     try:
         if delete_request.library not in ["organization", "private"]:
             return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
 
         if delete_request.library == "private" and not delete_request.user_id:
-            return JSONResponse(status_code=400, content={"error": "user_id is delete_requestuired for private library"})
+            return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
 
-        bucket_suffix = "org" if delete_request.library == "organization" else delete_request.user_id
-        bucket_name = f"bucket-{delete_request.organization_id}-{bucket_suffix}"
-        folder_prefix = "organization/" if delete_request.library == "organization" else f"private/{delete_request.user_id}/"
+        # Use the same bucket naming convention as upload
+        bucket_name = f"bucket-{delete_request.organization_id}"
+        
+        # Determine folder prefix based on library type (same as upload)
+        if delete_request.library == "organization":
+            folder_prefix = "organization/"
+        elif delete_request.library == "private":
+            folder_prefix = f"private/{delete_request.user_id}/"
+        else:
+            folder_prefix = ""
 
         storage_path = delete_request.storage_path or delete_request.filename
         if not storage_path:
-            return JSONResponse(status_code=400, content={"error": "storage_path or filename is delete_requestuired"})
+            return JSONResponse(status_code=400, content={"error": "storage_path or filename is required"})
 
+        # If storage_path doesn't include the folder prefix, add it
         normalized_path = storage_path.lstrip("/")
         if not normalized_path.startswith(folder_prefix):
             normalized_path = folder_prefix + normalized_path
 
-        bucket_name = f"bucket-{delete_request.organization_id}-{bucket_suffix}"
+        # Delete from GCS
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(normalized_path)
-        if blob.exists():
-            blob.delete()
-            return {"status": "success", "deleted": normalized_path}
-        return JSONResponse(status_code=404, content={"error": "File not found."})
+        if not blob.exists():
+            return JSONResponse(status_code=404, content={"error": "File not found in storage."})
+        
+        blob.delete()
+        logger.info(f"[delete_file] Deleted file from GCS: {normalized_path}")
+
+        # Delete chunks from Pinecone
+        index_name = delete_request.organization_id
+        namespace = "organization" if delete_request.library == "organization" else delete_request.user_id
+        
+        pinecone_deleted = 0
+        if pc.has_index(index_name):
+            try:
+                index = pc.Index(name=index_name)
+                # Delete all vectors with matching storage_path metadata
+                delete_response = index.delete(
+                    namespace=namespace,
+                    filter={"storage_path": {"$eq": normalized_path}}
+                )
+                pinecone_deleted = delete_response.get("deleted_count", 0) if isinstance(delete_response, dict) else 0
+                logger.info(f"[delete_file] Deleted {pinecone_deleted} vectors from Pinecone for {normalized_path}")
+            except Exception as e:
+                logger.error(f"[delete_file] Error deleting from Pinecone: {e}")
+                raise
+
+        return {
+            "status": "success",
+            "deleted_from_vectordb": pinecone_deleted > 0,
+            "vectors_deleted": pinecone_deleted,
+            "storage_path": normalized_path
+        }
     except Exception as e:
+        logger.error(f"[delete_file] Unexpected error: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 @kb_router.post("/download-file")
