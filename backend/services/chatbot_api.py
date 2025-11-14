@@ -102,9 +102,10 @@ def retrieve_relevant_docs(query: str, index_name: str, namespace: str, librarie
             "index_name": index_name,
             "namespace": namespace,
             "libraries": libraries,
-            "top_k": top_k,
-            "similarity_threshold": similarity_threshold
+            "top_k": top_k
         }
+        if similarity_threshold is not None:
+            retrieve_request["similarity_threshold"] = similarity_threshold
         retrieval = retriever.retrieve(RetrieveRequest(**retrieve_request))
     except Exception as e:
         print(f"[retrieve_relevant_docs] - Exception type: {type(e)}")
