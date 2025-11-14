@@ -27,7 +27,7 @@ writer = Writer()
 KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
-from backend.config.chatbot_config import CHATBOT_CONFIG
+from backend.config.chatbot_config import CHATBOT_CONFIG, SIMILARITY_THRESHOLD
 from backend.config.prompts import NO_RAG_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT, CHAT_PROMPT_TEMPLATE
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.utils.ai_workflow_utils.get_llm import get_llm
@@ -102,10 +102,9 @@ def retrieve_relevant_docs(query: str, index_name: str, namespace: str, librarie
             "index_name": index_name,
             "namespace": namespace,
             "libraries": libraries,
-            "top_k": top_k
+            "top_k": top_k,
+            "similarity_threshold": similarity_threshold
         }
-        if similarity_threshold is not None:
-            retrieve_request["similarity_threshold"] = similarity_threshold
         retrieval = retriever.retrieve(RetrieveRequest(**retrieve_request))
     except Exception as e:
         print(f"[retrieve_relevant_docs] - Exception type: {type(e)}")
@@ -148,6 +147,7 @@ async def process_chat_request(chat_data: dict):
         top_k = chat_data["top_k"]
         index_name = chat_data["index_name"]
         namespace = chat_data["namespace"]
+        similarity_threshold = chat_data.get("similarity_threshold", 0.50) # Default to 0.50 if not provided
         
         # LLM parameters
         temperature = chat_data["temperature"]
@@ -181,7 +181,7 @@ async def process_chat_request(chat_data: dict):
                 namespace=namespace,
                 libraries=libraries,
                 top_k=top_k,
-                similarity_threshold=None  # Will use default from SIMILARITY_THRESHOLD constant
+                similarity_threshold=similarity_threshold  # Will use default from SIMILARITY_THRESHOLD constant
             )
             logger.info(f"[process_chat_request] Retrieved {len(docs)} relevant docs")
         
@@ -281,6 +281,7 @@ async def chat(
     user_id = request.userId
     organization_id = request.organizationId
     top_k = get_config_value(config_set=CHATBOT_CONFIG, key="top_k")
+    similarity_threshold = SIMILARITY_THRESHOLD
     index_name = str(organization_id)
     namespace = str(user_id)
     libraries = request.libraries
@@ -337,6 +338,7 @@ async def chat(
         "message": message,
         "user_id": user_id,
         "organization_id": organization_id,
+        "similarity_threshold": similarity_threshold,
         "libraries": libraries,
         "top_k": top_k,
         "index_name": index_name,
