@@ -15,7 +15,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
-from backend.config.chatbot_config import EMBEDDING_CONFIG
+from backend.config.chatbot_config import EMBEDDING_CONFIG, SIMILARITY_THRESHOLD
 
 # Cohere
 cohere_api_key = os.getenv("COHERE_API_KEY")
@@ -31,6 +31,7 @@ class RetrieveRequest(BaseModel):
     namespace: str | None = None  # Required when "private" is selected
     libraries: list[str]  # e.g. ["organization", "private", "public"]
     top_k: int = 5
+    similarity_threshold: float = SIMILARITY_THRESHOLD
 
 class Retriever:
     def __init__(self):
@@ -125,12 +126,25 @@ class Retriever:
                     "total_results": 0,
                 }
 
+            # Filter by similarity threshold
+            aggregated_matches = [
+                match for match in aggregated_matches 
+                if match.get("score", 0) >= retrieve_request.similarity_threshold
+            ]
+
+            if not aggregated_matches:
+                print(f"[retrieve] No matches found above similarity threshold {retrieve_request.similarity_threshold}")
+                return {
+                    "status": "success",
+                    "query": retrieve_request.query,
+                    "results": [],
+                    "total_results": 0,
+                }
+
             # Sort combined matches by descending score and trim to top_k / number of libraries
             aggregated_matches.sort(key=lambda match: match.get("score", 0), reverse=True)
-            print(f"[retrieve] top k aggregated: {retrieve_request.top_k * len(requested_libraries)}")
-            aggregated_matches = aggregated_matches[: retrieve_request.top_k * len(requested_libraries)] # //
-            # ! Temporary change: return 5 top_k, not divided by libraries because it's only from public
-            # aggregated_matches = aggregated_matches[:5]
+            print(f"[retrieve] top k aggregated: {retrieve_request.top_k // len(requested_libraries)}")
+            aggregated_matches = aggregated_matches[: retrieve_request.top_k // len(requested_libraries)]
 
             retrieved_docs = []
             for match in aggregated_matches:
