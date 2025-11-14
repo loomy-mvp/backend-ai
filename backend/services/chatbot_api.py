@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 import httpx
@@ -7,6 +7,15 @@ import os
 # Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv(override=True)
+
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # Retriever
 from backend.services.retrieve import Retriever 
@@ -122,13 +131,143 @@ def format_docs(docs: List[dict]) -> str:
     
     return "\n----------\n".join(formatted_docs)
 
+async def process_chat_request(chat_data: dict):
+    """Background task to process chat request with RAG functionality."""
+    try:
+        logger.info(f"[process_chat_request] Starting chat processing for message_id {chat_data['message_id']}")
+        
+        # Extract parameters
+        message_id = chat_data["message_id"]
+        conversation_id = chat_data["conversation_id"]
+        message = chat_data["message"]
+        user_id = chat_data["user_id"]
+        organization_id = chat_data["organization_id"]
+        libraries = chat_data["libraries"]
+        top_k = chat_data["top_k"]
+        index_name = chat_data["index_name"]
+        namespace = chat_data["namespace"]
+        
+        # LLM parameters
+        temperature = chat_data["temperature"]
+        model = chat_data["model"]
+        provider = chat_data["provider"]
+        max_tokens = chat_data["max_tokens"]
+        
+        # Initialize LLM
+        llm = get_llm(provider, model, temperature, max_tokens)
+        logger.info("[process_chat_request] LLM initialized")
+        
+        # Get chat history
+        chat_history = get_chat_history(conversation_id)
+        logger.info(f"[process_chat_request] Chat history length: {len(chat_history)}")
+        
+        # Decide whether to retrieve documents or go plain LLM
+        retrieve = retrieval_judge.judge_retrieval(chat_history, message)
+        logger.info(f"[process_chat_request] Retrieval decision: {retrieve}")
+        
+        # If no retrieval, set system message to not use context
+        if retrieve is False:
+            docs = []
+            system_message = NO_RAG_SYSTEM_PROMPT
+            logger.info("[process_chat_request] Retrieval disabled; using NO_RAG_SYSTEM_PROMPT")
+        else:
+            # Retrieve relevant documents
+            system_message = RAG_SYSTEM_PROMPT
+            docs = retrieve_relevant_docs(
+                query=message,
+                index_name=index_name,
+                namespace=namespace,
+                libraries=libraries,
+                top_k=top_k
+            )
+            logger.info(f"[process_chat_request] Retrieved {len(docs)} relevant docs")
+        
+        # Format documents as context
+        context = format_docs(docs)
+        logger.info("[process_chat_request] Context formatted")
+        
+        # Create RAG chain
+        chain = create_chain(llm=llm, prompt_template=CHAT_PROMPT_TEMPLATE)
+        logger.info(f"[process_chat_request] {'RAG' if retrieve else 'Plain'} chain created")
+        
+        logger.info("[process_chat_request] LLM payload: " + str({
+            "system_prompt": system_message,
+            "context": context,
+            "question": message,
+            "chat_history": chat_history
+        }))
+        
+        # Generate response
+        response = await chain.ainvoke({
+            "system_prompt": system_message,
+            "context": context,
+            "question": message,
+            "chat_history": chat_history
+        })
+        logger.info("[process_chat_request] Response generated")
+        
+        # Prepare sources for response
+        sources = []
+        for doc in docs:
+            source_info = {
+                "chunk_id": doc.get("chunk_id", None),
+                "chunk_text": doc.get("chunk_text", ""),
+                "score": doc.get("score", None),
+                "page": doc.get("page", None),
+                "library": doc.get("library", None),
+                "doc_name": doc.get("doc_name", None),
+                "storage_path": doc.get("storage_path", None)
+            }
+            sources.append(source_info)
+        logger.info(f"[process_chat_request] Prepared {len(sources)} sources")
+        
+        # Send webhook notification with success
+        await send_chatbot_webhook({
+            "message_id": message_id,
+            "status": "generated",
+            "content": response,
+            "metadata": {"chunks": sources}
+        })
+        
+        logger.info(f"[process_chat_request] Chat processing completed for message_id {message_id}")
+        
+    except Exception as e:
+        logger.error(f"[process_chat_request] Error processing chat request for message_id {chat_data.get('message_id')}: {str(e)}", exc_info=True)
+        
+        # Send webhook notification with error
+        await send_chatbot_webhook({
+            "message_id": chat_data.get("message_id"),
+            "status": "error",
+            "content": "",
+            "metadata": {
+                "error": str(e),
+                "conversation_id": chat_data.get("conversation_id")
+            }
+        })
+
 # API Endpoints
 @chatbot_router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
+async def chat(
+    background_tasks: BackgroundTasks,
+    request: ChatRequest
+):
     """
     Main chat endpoint with RAG functionality.
+    
+    This endpoint processes chat requests asynchronously:
+    1. Validates the request and prepares parameters
+    2. Starts background processing
+    3. Returns immediately with receipt
+    4. Sends webhook notification when processing completes
+    
+    Args:
+        request: ChatRequest containing message, conversation details, and configuration
+    
+    Returns:
+        ChatResponse with status "pending" and empty content
     """
-    print("[chat] Received chat request: ", request)
+    logger.info(f"[chat] Received chat request for message_id {request.messageId}")
+    
     # Message parameters
     message_id = request.messageId
     conversation_id = request.conversationId
@@ -144,20 +283,12 @@ async def chat(request: ChatRequest):
     libraries = request.libraries
 
     # LLM parameters
-    system_message = None
     temperature = get_config_value(config_set=CHATBOT_CONFIG, key="temperature")
     model = get_config_value(config_set=CHATBOT_CONFIG, key="model")
     provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
     max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens")
     
-    # Initialize LLM
-    llm = get_llm(provider, model, temperature, max_tokens)
-    print("[chat] LLM initialized")
-    
-    # Get chat history
-    chat_history = get_chat_history(conversation_id)
-    print(f"[chat] Chat history length: {len(chat_history)}")
-
+    # Handle test mode
     if request.test:
         await send_chatbot_webhook({
             "message_id": message_id,
@@ -187,7 +318,7 @@ async def chat(request: ChatRequest):
             })
         return ChatResponse(
             message_id=message_id,
-            status="generating",
+            status="pending",
             content="",
             metadata={}
         )
@@ -195,88 +326,37 @@ async def chat(request: ChatRequest):
     # Prompt template workflow
     if prompt_template:
         pass  # TODO: Implement custom prompt template handling
-
-    # Decide whether to retrieve documents or go plain LLM
-    retrieve = retrieval_judge.judge_retrieval(chat_history, message)
-
-    # RAG Chatbot workflow
-    try:
-        print("[chat] Start chat endpoint")
-        # If no retrieval, set system message to not use context
-        if retrieve is False:
-            docs = []
-            system_message = NO_RAG_SYSTEM_PROMPT
-            print("[chat] Retrieval disabled; using NO_RAG_SYSTEM_PROMPT")
-        else:
-            # Retrieve relevant documents
-            # ? Retrieve va fatto anche sulla history?
-            system_message = RAG_SYSTEM_PROMPT
-            docs = retrieve_relevant_docs(
-                query=message,
-                index_name=index_name,
-                namespace=namespace,
-                libraries=libraries,
-                top_k=top_k
-            )
-            print(f"[chat] Retrieved {len(docs)} relevant docs")
-        
-        # Format documents as context
-        context = format_docs(docs)
-        print("[chat] Context formatted")
-        
-        # Create RAG chain
-        chain = create_chain(llm=llm, prompt_template=CHAT_PROMPT_TEMPLATE)
-        print(f"""[chat] {'RAG' if retrieve else 'Plain'} chain created""")
-        
-        print("[chat] LLM payload: ", {
-            "system_prompt": system_message,
-            "context": context,
-            "question": message,
-            "chat_history": chat_history # ! LLM legge il messaggio da qui e non da message
-        })
-
-        # Generate response (Memory persistence to DB is handled by TypeSript backend)
-        response = await chain.ainvoke({
-            "system_prompt": system_message,
-            "context": context,
-            "question": message,
-            "chat_history": chat_history
-        })
-        print("[chat] Response generated")
-        
-        # Prepare sources for response
-        sources = []
-        for doc in docs:
-            source_info = {
-                "chunk_id": doc.get("chunk_id", None),
-                "chunk_text": doc.get("chunk_text", ""),
-                "score": doc.get("score", None),
-                "page": doc.get("page", None),
-                "library": doc.get("library", None),
-                "doc_name": doc.get("doc_name", None),
-                "storage_path": doc.get("storage_path", None)
-            }
-            sources.append(source_info)
-        print(f"[chat] Returning response with {len(sources)} sources")
-        
-        # Send webhook notification
-        await send_chatbot_webhook({
-            "message_id": message_id,
-            "status": "generated",
-            "content": response,
-            "metadata": {"chunks": sources}
-        })
-        
-        return ChatResponse(
-            message_id=message_id,
-            status="generated",
-            content=response,
-            metadata={"chunks": sources}
-        )
-        
-    except Exception as e:
-        print(f"[chat] Exception occurred: {e}")
-        raise HTTPException(status_code=500, detail=f"Error processing chat request: {str(e)}")
+    
+    # Prepare chat data for background processing
+    chat_data = {
+        "message_id": message_id,
+        "conversation_id": conversation_id,
+        "message": message,
+        "user_id": user_id,
+        "organization_id": organization_id,
+        "libraries": libraries,
+        "top_k": top_k,
+        "index_name": index_name,
+        "namespace": namespace,
+        "temperature": temperature,
+        "model": model,
+        "provider": provider,
+        "max_tokens": max_tokens
+    }
+    
+    # Add chat processing to background tasks
+    background_tasks.add_task(process_chat_request, chat_data)
+    
+    # Return immediately with receipt
+    return ChatResponse(
+        message_id=message_id,
+        status="pending",
+        content="",
+        metadata={
+            "conversation_id": conversation_id,
+            "message": "Chat request received and processing started. You will receive a webhook notification when complete."
+        }
+    )
 
 @chatbot_router.get("/health")
 async def health_check():
