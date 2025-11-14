@@ -69,6 +69,7 @@ class RetrieveRequest(BaseModel):
     namespace: str | None = None  # Required when "private" is selected
     libraries: list[str]  # e.g. ["organization", "private", "public"]
     top_k: int = 5
+    similarity_threshold: float = SIMILARITY_THRESHOLD
 
 async def send_chatbot_webhook(chatbot_webhook_payload: dict):
     """Send chatbot processing status to the configured webhook."""
