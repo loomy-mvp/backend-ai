@@ -93,7 +93,7 @@ async def send_chatbot_webhook(chatbot_webhook_payload: dict):
         print(f"[webhook] Failed to send notification: {exc}")
 
 # Retrieval function from kb_api.py
-def retrieve_relevant_docs(query: str, index_name: str, namespace: str, libraries: list, top_k: int = 5) -> List[dict]:
+def retrieve_relevant_docs(query: str, index_name: str, namespace: str, libraries: list, top_k: int = 5, similarity_threshold: float | None = None) -> List[dict]:
     """Retrieve relevant documents from the vector store."""
     print("[retrieve_relevant_docs] - Starts retrieving function")
     try:
@@ -102,7 +102,8 @@ def retrieve_relevant_docs(query: str, index_name: str, namespace: str, librarie
             "index_name": index_name,
             "namespace": namespace,
             "libraries": libraries,
-            "top_k": top_k
+            "top_k": top_k,
+            "similarity_threshold": similarity_threshold
         }
         retrieval = retriever.retrieve(RetrieveRequest(**retrieve_request))
     except Exception as e:
@@ -178,7 +179,8 @@ async def process_chat_request(chat_data: dict):
                 index_name=index_name,
                 namespace=namespace,
                 libraries=libraries,
-                top_k=top_k
+                top_k=top_k,
+                similarity_threshold=None  # Will use default from SIMILARITY_THRESHOLD constant
             )
             logger.info(f"[process_chat_request] Retrieved {len(docs)} relevant docs")
         
