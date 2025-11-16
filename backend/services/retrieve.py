@@ -32,10 +32,21 @@ class RetrieveRequest(BaseModel):
     libraries: list[str]  # e.g. ["organization", "private", "public"]
     top_k: int = 5
     similarity_threshold: float = SIMILARITY_THRESHOLD
+    sources: list[str] | None = None
 
 class Retriever:
     def __init__(self):
         pass
+
+    @staticmethod
+    def _build_metadata_filter(base_filter: dict | None, sources: list[str] | None) -> dict | None:
+        """Merge the base filter with the optional source filter."""
+        if not sources:
+            return base_filter
+
+        metadata_filter = dict(base_filter) if base_filter else {}
+        metadata_filter["source"] = {"$in": sources}
+        return metadata_filter
 
     def query_index(self, index_name: str, namespace: str | None, metadata_filter: dict | None, query_embedding, top_k):
         if not pc.has_index(index_name):
@@ -72,6 +83,13 @@ class Retriever:
 
             print(f"[retrieve] Libraries requested: {sorted(requested_libraries)}")
 
+            source_filter = None
+            if retrieve_request.sources:
+                cleaned_sources = sorted({source.strip() for source in retrieve_request.sources if source and source.strip()})
+                if cleaned_sources:
+                    source_filter = cleaned_sources
+                    print(f"[retrieve] Applying source filter: {source_filter}")
+
             # Embed the query once
             print(f"[retrieve] Embedding query: {retrieve_request.query}")
             query_embedding = co.embed(texts=[retrieve_request.query],
@@ -86,7 +104,7 @@ class Retriever:
                 matches = self.query_index(
                     index_name=retrieve_request.index_name,
                     namespace="organization",
-                    metadata_filter={"library": {"$eq": "organization"}},
+                    metadata_filter=self._build_metadata_filter({"library": {"$eq": "organization"}}, source_filter),
                     query_embedding=query_embedding,
                     top_k=retrieve_request.top_k
                 )
@@ -97,10 +115,10 @@ class Retriever:
                 matches = self.query_index(
                     index_name=retrieve_request.index_name,
                     namespace=retrieve_request.namespace,
-                    metadata_filter={
+                    metadata_filter=self._build_metadata_filter({
                         "library": {"$eq": "private"},
                         "user_id": {"$eq": retrieve_request.namespace},
-                    },
+                    }, source_filter),
                     query_embedding=query_embedding,
                     top_k=retrieve_request.top_k
                 )
@@ -111,7 +129,7 @@ class Retriever:
                 matches = self.query_index(
                     index_name="public",
                     namespace=None,
-                    metadata_filter={"library": {"$eq": "public"}},
+                    metadata_filter=self._build_metadata_filter({"library": {"$eq": "public"}}, source_filter),
                     query_embedding=query_embedding,
                     top_k=retrieve_request.top_k
                 )
@@ -157,7 +175,8 @@ class Retriever:
                     "page": metadata.get("page"),
                     "library": metadata.get("library"),
                     "doc_name": metadata.get("doc_name", ""),
-                    "storage_path": metadata.get("storage_path", "")
+                    "storage_path": metadata.get("storage_path", ""),
+                    "source": metadata.get("source")
                 })
 
             print(f"[retrieve] Returning {len(retrieved_docs)} results")

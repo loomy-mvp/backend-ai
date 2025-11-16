@@ -53,6 +53,7 @@ class ChatRequest(BaseModel):
     userId: str
     organizationId: str
     libraries: Optional[List[str]] = ["organization", "private", "public"]
+    sources: Optional[List[str]] = None
     message: str
     promptTemplate: Optional[str] = None
     test: bool
@@ -70,6 +71,7 @@ class RetrieveRequest(BaseModel):
     libraries: list[str]  # e.g. ["organization", "private", "public"]
     top_k: int = 5
     similarity_threshold: float = SIMILARITY_THRESHOLD
+    sources: list[str] | None = None
 
 async def send_chatbot_webhook(chatbot_webhook_payload: dict):
     """Send chatbot processing status to the configured webhook."""
@@ -94,7 +96,15 @@ async def send_chatbot_webhook(chatbot_webhook_payload: dict):
         print(f"[webhook] Failed to send notification: {exc}")
 
 # Retrieval function from kb_api.py
-def retrieve_relevant_docs(query: str, index_name: str, namespace: str, libraries: list, top_k: int = 5, similarity_threshold: float | None = None) -> List[dict]:
+def retrieve_relevant_docs(
+    query: str,
+    index_name: str,
+    namespace: str,
+    libraries: list,
+    top_k: int = 5,
+    similarity_threshold: float | None = None,
+    sources: Optional[List[str]] = None
+) -> List[dict]:
     """Retrieve relevant documents from the vector store."""
     print("[retrieve_relevant_docs] - Starts retrieving function")
     try:
@@ -104,7 +114,8 @@ def retrieve_relevant_docs(query: str, index_name: str, namespace: str, librarie
             "namespace": namespace,
             "libraries": libraries,
             "top_k": top_k,
-            "similarity_threshold": similarity_threshold
+            "similarity_threshold": similarity_threshold,
+            "sources": sources,
         }
         retrieval = retriever.retrieve(RetrieveRequest(**retrieve_request))
     except Exception as e:
@@ -145,6 +156,7 @@ async def process_chat_request(chat_data: dict):
         user_id = chat_data["user_id"]
         organization_id = chat_data["organization_id"]
         libraries = chat_data["libraries"]
+        source_filter = chat_data.get("sources")
         top_k = chat_data["top_k"]
         index_name = chat_data["index_name"]
         namespace = chat_data["namespace"]
@@ -182,7 +194,8 @@ async def process_chat_request(chat_data: dict):
                 namespace=namespace,
                 libraries=libraries,
                 top_k=top_k,
-                similarity_threshold=similarity_threshold  # Will use default from SIMILARITY_THRESHOLD constant
+                similarity_threshold=similarity_threshold,
+                sources=source_filter  # Optional metadata filter
             )
             logger.info(f"[process_chat_request] Retrieved {len(docs)} relevant docs")
         
@@ -211,7 +224,7 @@ async def process_chat_request(chat_data: dict):
         logger.info("[process_chat_request] Response generated")
         
         # Prepare sources for response
-        sources = []
+        retrieved_sources = []
         for doc in docs:
             source_info = {
                 "chunk_id": doc.get("chunk_id", None),
@@ -220,17 +233,18 @@ async def process_chat_request(chat_data: dict):
                 "page": doc.get("page", None),
                 "library": doc.get("library", None),
                 "doc_name": doc.get("doc_name", None),
-                "storage_path": doc.get("storage_path", None)
+                "storage_path": doc.get("storage_path", None),
+                "source": doc.get("source", None)
             }
-            sources.append(source_info)
-        logger.info(f"[process_chat_request] Prepared {len(sources)} sources")
+            retrieved_sources.append(source_info)
+        logger.info(f"[process_chat_request] Prepared {len(retrieved_sources)} sources")
         
         # Send webhook notification with success
         await send_chatbot_webhook({
             "message_id": message_id,
             "status": "generated",
             "content": response,
-            "metadata": {"chunks": sources}
+            "metadata": {"chunks": retrieved_sources}
         })
         
         logger.info(f"[process_chat_request] Chat processing completed for message_id {message_id}")
@@ -286,6 +300,7 @@ async def chat(
     index_name = str(organization_id)
     namespace = str(user_id)
     libraries = request.libraries
+    sources = request.sources
 
     # LLM parameters
     temperature = get_config_value(config_set=CHATBOT_CONFIG, key="temperature")
@@ -341,6 +356,7 @@ async def chat(
         "organization_id": organization_id,
         "similarity_threshold": similarity_threshold,
         "libraries": libraries,
+        "sources": sources,
         "top_k": top_k,
         "index_name": index_name,
         "namespace": namespace,
