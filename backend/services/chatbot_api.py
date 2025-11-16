@@ -70,7 +70,7 @@ class ChatRequest(BaseModel):
     sources: Optional[List[str]] = None
     message: str
     promptTemplate: Optional[str] = None
-    attachments: Optional[List[Attachment]] = None
+    attachments = None # Optional[List[Attachment]] = None
     test: bool
 
 class ChatResponse(BaseModel):
@@ -425,6 +425,7 @@ async def chat(
         ChatResponse with status "pending" and empty content
     """
     logger.info(f"[chat] Received chat request for message_id {request.messageId}")
+    logger.info(f"[chat] Received attachments: {request.attachments}")
     
     # Message parameters
     message_id = request.messageId
