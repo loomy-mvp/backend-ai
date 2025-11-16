@@ -1,9 +1,13 @@
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
+import base64
 import httpx
 from datetime import datetime
+import mimetypes
 import os
+from pathlib import Path
+from uuid import uuid4
 # Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -34,6 +38,11 @@ from backend.utils.ai_workflow_utils.get_llm import get_llm
 from backend.utils.auth import verify_token
 from backend.utils.ai_workflow_utils.create_chain import create_chain
 from backend.utils.ai_workflow_utils.get_chat_history import get_chat_history
+from backend.utils.ai_workflow_utils.attachment_processing import (
+    extract_attachment_text,
+    AttachmentProcessingError,
+)
+from langchain.schema import HumanMessage
 
 # Retrieval judge
 from backend.utils.ai_workflow_utils.retrieval_judge import RetrievalJudge
@@ -47,6 +56,11 @@ class ChatMessage(BaseModel):
     content: str
     timestamp: Optional[datetime] = None
 
+class Attachment(BaseModel):
+    filename: str
+    content_type: Optional[str] = None
+    data: str  # base64 encoded payload or data URL
+
 class ChatRequest(BaseModel):
     messageId: str
     conversationId: str
@@ -56,6 +70,7 @@ class ChatRequest(BaseModel):
     sources: Optional[List[str]] = None
     message: str
     promptTemplate: Optional[str] = None
+    attachments: Optional[List[Attachment]] = None
     test: bool
 
 class ChatResponse(BaseModel):
@@ -72,6 +87,116 @@ class RetrieveRequest(BaseModel):
     top_k: int = 5
     similarity_threshold: float = SIMILARITY_THRESHOLD
     sources: list[str] | None = None
+
+
+TEXT_ATTACHMENT_TYPES = {"application/pdf", "text/plain"}
+TEXT_ATTACHMENT_EXTENSIONS = {".pdf", ".txt"}
+IMAGE_ATTACHMENT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+def _decode_attachment_payload(data: str) -> tuple[bytes, Optional[str]]:
+    """Decode a base64 payload or data URL and return bytes plus inferred MIME type."""
+    if not data:
+        raise ValueError("Attachment payload is empty")
+
+    payload = data.strip()
+    if payload.startswith("data:"):
+        try:
+            header, encoded = payload.split(",", 1)
+        except ValueError as exc:
+            raise ValueError("Malformed data URL for attachment") from exc
+        mime = header.split(";")[0].replace("data:", "", 1)
+        return base64.b64decode(encoded), mime or None
+    return base64.b64decode(payload), None
+
+
+def _is_text_attachment(content_type: Optional[str], filename: str) -> bool:
+    if content_type and content_type.lower() in TEXT_ATTACHMENT_TYPES:
+        return True
+    extension = Path(filename).suffix.lower()
+    return extension in TEXT_ATTACHMENT_EXTENSIONS
+
+
+def _is_image_attachment(content_type: Optional[str], filename: str) -> bool:
+    if content_type and content_type.lower().startswith("image/"):
+        return True
+    extension = Path(filename).suffix.lower()
+    return extension in IMAGE_ATTACHMENT_EXTENSIONS
+
+
+def _format_attachment_block(filename: str, text: str) -> str:
+    return f"""<Attachment>
+|Source|: {filename}
+|Content|: {text.strip()}"""
+
+
+def _encode_image_data_url(content_type: Optional[str], data: bytes, filename: str) -> str:
+    # TODO: To reference a GCS location after persisting the image, modify this function accordingly.
+    guessed_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    b64 = base64.b64encode(data).decode("utf-8")
+    return f"data:{guessed_type};base64,{b64}"
+
+
+def _build_attachment_context(attachments: Optional[List[dict]]) -> tuple[str, int, List[dict]]:
+    """Create textual context and collect image payloads for attachments."""
+    if not attachments:
+        return "", 0, []
+
+    text_sections: list[str] = []
+    image_inputs: list[dict] = []
+
+    for attachment in attachments:
+        filename = attachment.get("filename") or "attachment"
+        content_type = attachment.get("content_type")
+        payload = attachment.get("data")
+        if not payload:
+            logger.warning("[attachments] Skipping %s: empty payload", filename)
+            continue
+
+        try:
+            file_bytes, inferred_type = _decode_attachment_payload(payload)
+        except Exception as exc:
+            logger.warning("[attachments] Failed to decode %s: %s", filename, exc)
+            continue
+
+        resolved_type = (content_type or inferred_type or mimetypes.guess_type(filename)[0] or "").lower()
+
+        if _is_text_attachment(resolved_type, filename):
+            try:
+                text_payload = extract_attachment_text(file_bytes, filename, resolved_type)
+            except AttachmentProcessingError as exc:
+                logger.warning("[attachments] Skipping text attachment %s: %s", filename, exc)
+                continue
+
+            normalized_text = text_payload.strip()
+            if not normalized_text:
+                logger.info("[attachments] No text extracted from %s", filename)
+                continue
+
+            text_sections.append(_format_attachment_block(filename, normalized_text))
+        elif _is_image_attachment(resolved_type, filename):
+            data_url = _encode_image_data_url(resolved_type, file_bytes, filename)
+            image_inputs.append({
+                "filename": filename,
+                "data_url": data_url,
+            })
+        else:
+            logger.warning("[attachments] Unsupported attachment type for %s (%s)", filename, resolved_type or "unknown")
+
+    text_context = "\n----------\n".join(text_sections)
+    return text_context, len(text_sections), image_inputs
+
+
+def _build_question_messages(question: str, image_inputs: List[dict]) -> List[HumanMessage]:
+    content_parts: list[Any] = [
+        {"type": "text", "text": f"<<<Prompt>>>\n{question}"}
+    ]
+
+    for image in image_inputs:
+        content_parts.append({"type": "text", "text": f"[Image Attachment: {image['filename']}]"})
+        content_parts.append({"type": "image_url", "image_url": {"url": image["data_url"]}})
+
+    return [HumanMessage(content=content_parts)]
 
 async def send_chatbot_webhook(chatbot_webhook_payload: dict):
     """Send chatbot processing status to the configured webhook."""
@@ -161,6 +286,7 @@ async def process_chat_request(chat_data: dict):
         index_name = chat_data["index_name"]
         namespace = chat_data["namespace"]
         similarity_threshold = chat_data.get("similarity_threshold")  # Will use default from config if not provided
+        attachments = chat_data.get("attachments")
         
         # LLM parameters
         temperature = chat_data["temperature"]
@@ -168,6 +294,9 @@ async def process_chat_request(chat_data: dict):
         provider = chat_data["provider"]
         max_tokens = chat_data["max_tokens"]
         
+        attachment_context, attachment_count, image_inputs = _build_attachment_context(attachments)
+        logger.info(f"[process_chat_request] Processed {attachment_count} text attachments and {len(image_inputs)} images")
+
         # Initialize LLM
         llm = get_llm(provider, model, temperature, max_tokens)
         logger.info("[process_chat_request] LLM initialized")
@@ -200,17 +329,28 @@ async def process_chat_request(chat_data: dict):
             logger.info(f"[process_chat_request] Retrieved {len(docs)} relevant docs")
         
         # Format documents as context
-        context = format_docs(docs)
-        logger.info("[process_chat_request] Context formatted")
+        ### Format attachments
+        context_sections: list[str] = []
+        if attachment_context:
+            context_sections.append(f"<<<User Attachments>>>\n{attachment_context}")
+        ### Format KB retrieved docs
+        formatted_docs = format_docs(docs)
+        if formatted_docs:
+            context_sections.append(f"<<<Knowledge Base>>>\n{formatted_docs}")
+        context = "\n\n".join(context_sections)
+        logger.info("[process_chat_request] Context formatted from attachments and retrieval")
+        logger.info("[process_chat_request] Attachment context: " + attachment_context)
         
         # Create RAG chain
         chain = create_chain(llm=llm, prompt_template=CHAT_PROMPT_TEMPLATE)
         logger.info(f"[process_chat_request] {'RAG' if retrieve else 'Plain'} chain created")
         
+        question_messages = _build_question_messages(message, image_inputs)
+
         logger.info("[process_chat_request] LLM payload: " + str({
             "system_prompt": system_message,
             "context": context,
-            "question": message,
+            "question_messages": "with_images" if image_inputs else "text_only",
             "chat_history": chat_history
         }))
         
@@ -218,13 +358,13 @@ async def process_chat_request(chat_data: dict):
         response = await chain.ainvoke({
             "system_prompt": system_message,
             "context": context,
-            "question": message,
+            "question_messages": question_messages,
             "chat_history": chat_history
         })
         logger.info("[process_chat_request] Response generated")
         
         # Prepare sources for response
-        retrieved_sources = []
+        retrieved_sources: list[dict] = []
         for doc in docs:
             source_info = {
                 "chunk_id": doc.get("chunk_id", None),
@@ -291,6 +431,7 @@ async def chat(
     conversation_id = request.conversationId
     message = request.message
     prompt_template = request.promptTemplate
+    attachments = request.attachments or []
 
     # RAG parameters
     user_id = request.userId
@@ -347,6 +488,8 @@ async def chat(
     if prompt_template:
         pass  # TODO: Implement custom prompt template handling
     
+    attachment_payload = [attachment.model_dump() for attachment in attachments]
+
     # Prepare chat data for background processing
     chat_data = {
         "message_id": message_id,
@@ -363,7 +506,8 @@ async def chat(
         "temperature": temperature,
         "model": model,
         "provider": provider,
-        "max_tokens": max_tokens
+        "max_tokens": max_tokens,
+        "attachments": attachment_payload
     }
     
     # Add chat processing to background tasks

@@ -1,11 +1,11 @@
 from typing import Final
-from langchain.prompts.chat import ChatPromptTemplate
+from langchain.prompts.chat import ChatPromptTemplate, MessagesPlaceholder
 
 CHAT_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
         ("system", "{system_prompt}"),
         ("user", "<<<Chat history>>>\n{chat_history}\n"),
         ("user", "<<<Context>>>\n{context}\n"),
-        ("user", "<<<Prompt>>>\n{question}")
+        MessagesPlaceholder(variable_name="question_messages")
     ])
 
 NO_RAG_SYSTEM_PROMPT = """Sei un assistente AI per gli studi di commercialisti.
