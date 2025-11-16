@@ -70,7 +70,7 @@ class ChatRequest(BaseModel):
     sources: Optional[List[str]] = None
     message: str
     promptTemplate: Optional[str] = None
-    attachments = None # Optional[List[Attachment]] = None
+    attachments: List[Any] = None # Optional[List[Attachment]] = None
     test: bool
 
 class ChatResponse(BaseModel):
