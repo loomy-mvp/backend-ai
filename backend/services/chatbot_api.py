@@ -70,7 +70,7 @@ class ChatRequest(BaseModel):
     sources: Optional[List[str]] = None
     message: str
     promptTemplate: Optional[str] = None
-    attachments: List[Any] = None # Optional[List[Attachment]] = None
+    attachments: List[str] = None # Optional[List[Attachment]] = None
     test: bool
 
 class ChatResponse(BaseModel):
@@ -197,6 +197,67 @@ def _build_question_messages(question: str, image_inputs: List[dict]) -> List[Hu
         content_parts.append({"type": "image_url", "image_url": {"url": image["data_url"]}})
 
     return [HumanMessage(content=content_parts)]
+
+
+def _guess_attachment_filename(content_type: Optional[str], index: int) -> str:
+    """Derive a fallback filename when the client does not provide one."""
+    extension = mimetypes.guess_extension(content_type or "") or ""
+    return f"attachment_{index + 1}{extension}"
+
+
+def _string_attachment_to_dict(raw_attachment: str, index: int) -> dict:
+    """Convert a simple string payload into the structured attachment shape."""
+    payload = raw_attachment.strip()
+    if not payload:
+        raise ValueError("Attachment string is empty")
+
+    content_type: Optional[str] = None
+    data = payload
+
+    if payload.startswith("data:"):
+        # Preserve the full data URL so downstream decoding works unchanged.
+        header = payload.split(";", 1)[0]
+        content_type = header.replace("data:", "", 1) or None
+    elif ":" in payload:
+        possible_type, remainder = payload.split(":", 1)
+        if "/" in possible_type:
+            content_type = possible_type
+            data = remainder
+
+    return {
+        "filename": _guess_attachment_filename(content_type, index),
+        "content_type": content_type,
+        "data": data,
+    }
+
+
+def _normalize_request_attachments(raw_attachments: Optional[List[Any]]) -> List[dict]:
+    """Ensure every attachment passed downstream is a dict with expected keys."""
+    if not raw_attachments:
+        return []
+
+    normalized: List[dict] = []
+
+    for idx, attachment in enumerate(raw_attachments):
+        if not isinstance(attachment, str):
+            logger.warning(
+                "[attachments] Expected string payload but received %s at index %s",
+                type(attachment),
+                idx,
+            )
+            continue
+
+        try:
+            payload = _string_attachment_to_dict(attachment, idx)
+            normalized.append(payload)
+        except Exception as exc:
+            logger.warning(
+                "[attachments] Failed to normalize attachment at index %s: %s",
+                idx,
+                exc,
+            )
+
+    return normalized
 
 async def send_chatbot_webhook(chatbot_webhook_payload: dict):
     """Send chatbot processing status to the configured webhook."""
@@ -425,7 +486,6 @@ async def chat(
         ChatResponse with status "pending" and empty content
     """
     logger.info(f"[chat] Received chat request for message_id {request.messageId}")
-    logger.info(f"[chat] Received attachments: {request.attachments}")
     
     # Message parameters
     message_id = request.messageId
@@ -489,7 +549,11 @@ async def chat(
     if prompt_template:
         pass  # TODO: Implement custom prompt template handling
     
-    attachment_payload = [attachment.model_dump() for attachment in attachments]
+    attachment_payload = _normalize_request_attachments(attachments)
+    logger.info(
+        "[chat] Normalized %s attachment(s) for processing",
+        len(attachment_payload),
+    )
 
     # Prepare chat data for background processing
     chat_data = {
