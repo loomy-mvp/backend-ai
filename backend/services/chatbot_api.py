@@ -56,11 +56,6 @@ class ChatMessage(BaseModel):
     content: str
     timestamp: Optional[datetime] = None
 
-class Attachment(BaseModel):
-    filename: str
-    content_type: Optional[str] = None
-    data: str  # base64 encoded payload or data URL
-
 class ChatRequest(BaseModel):
     messageId: str
     conversationId: str
@@ -70,7 +65,7 @@ class ChatRequest(BaseModel):
     sources: Optional[List[str]] = None
     message: str
     promptTemplate: Optional[str] = None
-    attachments: List[str] = None # Optional[List[Attachment]] = None
+    attachments: List[str] = None
     test: bool
 
 class ChatResponse(BaseModel):
