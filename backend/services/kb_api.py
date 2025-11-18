@@ -90,6 +90,51 @@ class DeleteFileRequest(BaseModel):
     storage_path: str | None = None
     filename: str | None = None
 
+
+def delete_public_document(storage_path: str, bucket_name: str = "loomy-public-documents") -> None:
+    """Delete a document from the public bucket and remove its vectors from Pinecone."""
+    # GCS
+    if not storage_path or not storage_path.strip():
+        raise ValueError("storage_path is required")
+
+    normalized_path = storage_path.lstrip("/")
+    if not normalized_path:
+        raise ValueError("storage_path cannot be empty")
+
+    bucket = storage_client.get_bucket(bucket_name)
+    blob = bucket.blob(normalized_path)
+    if not blob.exists():
+        raise FileNotFoundError(f"Document {normalized_path} not found in {bucket_name}")
+
+    blob.delete()
+    logger.info(f"[delete_public_document] Deleted file from GCS: {normalized_path}")
+
+    # Pinecone
+    index_name = "public"
+    if not pc.has_index(index_name):
+        logger.warning(
+            "[delete_public_document] Pinecone index '%s' does not exist; skipping vector deletion",
+            index_name,
+        )
+        return
+
+    try:
+        index = pc.Index(name=index_name)
+        delete_response = index.delete(filter={"storage_path": {"$eq": normalized_path}})
+        pinecone_deleted = (
+            delete_response.get("deleted_count", 0)
+            if isinstance(delete_response, dict)
+            else 0
+        )
+        logger.info(
+            "[delete_public_document] Deleted %s vectors from Pinecone for %s",
+            pinecone_deleted,
+            normalized_path,
+        )
+    except Exception as exc:
+        logger.error("[delete_public_document] Error deleting from Pinecone: %s", exc, exc_info=True)
+        raise
+
 def cosine_similarity(a, b):
     a = np.array(a)
     b = np.array(b)
@@ -690,6 +735,8 @@ def delete_file(delete_request: DeleteFileRequest):
     except Exception as e:
         logger.error(f"[delete_file] Unexpected error: {e}", exc_info=True)
         return JSONResponse(status_code=500, content={"error": str(e)})
+    
+
 
 @kb_router.post("/download-file")
 def download_file(download_request: DeleteFileRequest):
