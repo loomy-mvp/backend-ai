@@ -11,7 +11,7 @@ import mimetypes
 import uuid
 import unicodedata
 import gc
-from typing import Any, Dict
+from typing import Any, Dict, List
 from pathlib import Path
 import sys
 
@@ -30,6 +30,8 @@ from backend.config.chatbot_config import EMBEDDING_CONFIG
 from backend.utils.ai_workflow_utils.document_processing import get_document_processor
 
 logger = logging.getLogger(__name__)
+
+MAX_CHUNK_CHAR_LENGTH = 8000  # keeps Pinecone metadata comfortably below 40 KB
 
 # Initialize clients
 gcp_credentials_info = os.getenv("GCP_SERVICE_ACCOUNT_CREDENTIALS")
@@ -71,6 +73,59 @@ def estimate_tokens(text: str) -> int:
     word_count = len(text.split()) + 1
     return int(word_count / 1.33)
 
+def _split_text_to_fit_limit(text: str, max_chars: int = MAX_CHUNK_CHAR_LENGTH) -> List[str]:
+    """Split text into chunks that respect the max character budget."""
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: List[str] = []
+    remaining = text.strip()
+
+    while len(remaining) > max_chars:
+        # Prefer breaking on paragraph or sentence boundaries to preserve semantics
+        split_idx = max(
+            remaining.rfind("\n\n", 0, max_chars),
+            remaining.rfind("\n", 0, max_chars),
+            remaining.rfind(". ", 0, max_chars),
+            remaining.rfind(" ", 0, max_chars)
+        )
+
+        if split_idx == -1 or split_idx < int(max_chars * 0.4):
+            split_idx = max_chars
+
+        chunk = remaining[:split_idx].strip()
+        if chunk:
+            chunks.append(chunk)
+        remaining = remaining[split_idx:].strip()
+
+    if remaining:
+        chunks.append(remaining)
+
+    return chunks
+
+
+def _append_chunk(chunks: List[dict], doc_metadata: dict, safe_doc_name: str, text: str) -> None:
+    for piece in _split_text_to_fit_limit(text):
+        if not piece:
+            continue
+        chunks.append({
+            "chunk_id": f"{safe_doc_name}-{str(uuid.uuid4())}",
+            "page": doc_metadata["page"],
+            "text": piece,
+            "storage_path": doc_metadata["storage_path"]
+        })
+
+
+def _embed_paragraph(text: str) -> np.ndarray:
+    embedding = co.embed(
+        texts=[text],
+        model=embedding_model_name,
+        input_type="search_document",
+        embedding_types=["float"]
+    ).embeddings.float_[0]
+    return np.asarray(embedding, dtype=np.float32)
+
+
 def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.65, max_tokens: int = 1000, min_tokens: int = 150) -> list:
     """
     Split document content into semantically-merged chunks.
@@ -85,27 +140,17 @@ def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.6
     
     chunks = []
     current_chunk = paragraphs[0]
-    current_chunk_texts = [current_chunk]
+    current_chunk_size = 1
     
     # Sanitize doc name for ASCII-only IDs
     safe_doc_name = sanitize_to_ascii(doc_metadata['name'])
     
     # Get embedding for the first paragraph
-    current_embedding = co.embed(
-        texts=[current_chunk],
-        model=embedding_model_name,
-        input_type="search_document",
-        embedding_types=["float"]
-    ).embeddings.float_[0]
+    current_embedding = _embed_paragraph(current_chunk)
     
     for i in range(1, len(paragraphs)):
         para = paragraphs[i]
-        para_embedding = co.embed(
-            texts=[para],
-            model=embedding_model_name,
-            input_type="search_document",
-            embedding_types=["float"]
-        ).embeddings.float_[0]
+        para_embedding = _embed_paragraph(para)
         
         sim = cosine_similarity(current_embedding, para_embedding)
         
@@ -128,29 +173,20 @@ def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.6
         if should_merge:
             # Merge with current chunk
             current_chunk = potential_chunk
-            current_chunk_texts.append(para)
+            previous_count = current_chunk_size
+            current_chunk_size += 1
             # Update current embedding as the mean of embeddings
-            current_embedding = (current_embedding * len(current_chunk_texts) + para_embedding) / (len(current_chunk_texts) + 1)
+            current_embedding = (current_embedding * previous_count + para_embedding) / current_chunk_size
         else:
             # Save current chunk (split due to low similarity or token limit exceeded)
-            chunks.append({
-                "chunk_id": f"{safe_doc_name}-{str(uuid.uuid4())}",
-                "page": doc_metadata["page"],
-                "text": current_chunk,
-                "storage_path": doc_metadata["storage_path"]
-            })
+            _append_chunk(chunks, doc_metadata, safe_doc_name, current_chunk)
             # Start new chunk
             current_chunk = para
-            current_chunk_texts = [para]
+            current_chunk_size = 1
             current_embedding = para_embedding
     
     # Add last chunk
-    chunks.append({
-        "chunk_id": f"{safe_doc_name}-{str(uuid.uuid4())}",
-        "page": doc_metadata["page"],
-        "text": current_chunk,
-        "storage_path": doc_metadata["storage_path"]
-    })
+    _append_chunk(chunks, doc_metadata, safe_doc_name, current_chunk)
     
     return chunks
 
