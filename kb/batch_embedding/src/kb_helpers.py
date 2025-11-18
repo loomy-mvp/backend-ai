@@ -193,9 +193,9 @@ def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.6
 
 class EmbedRequest(BaseModel):
     library: str
-    organization_id: str
+    organization_id: str | None = None
     bucket_name: str
-    user_id: str = None
+    user_id: str | None = None
     storage_path: str | None = None
     content_type: str | None = None
     overwrite: bool = False

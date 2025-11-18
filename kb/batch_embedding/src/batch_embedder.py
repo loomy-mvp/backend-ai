@@ -25,16 +25,19 @@ logger = logging.getLogger(__name__)
 class BatchEmbedder:
     """Handles batch embedding of documents from GCS to Pinecone."""
     
-    def __init__(self, organization_id: str, library: str, user_id: str = None):
-        self.organization_id = organization_id
-        self.library = library
-        self.user_id = user_id
-        
+    def __init__(self, library: str, organization_id: str | None = None, user_id: str | None = None):
         if library not in ["organization", "private", "public"]:
             raise ValueError("library must be 'organization', 'private', or 'public'")
 
+        if library in ["organization", "private"] and not organization_id:
+            raise ValueError("organization_id is required for organization and private libraries")
+
         if library == "private" and not user_id:
             raise ValueError("user_id is required for private library")
+
+        self.organization_id = organization_id
+        self.library = library
+        self.user_id = user_id
         
         # Initialize GCS client with credentials
         # Try to use explicit credentials from env var first, otherwise use default credentials
@@ -59,7 +62,12 @@ class BatchEmbedder:
             raise ValueError("PINECONE_API_KEY environment variable not set")
         self.pc = Pinecone(api_key=pinecone_api_key)
         
-        logger.info(f"BatchEmbedder initialized for org={organization_id}, library={library}, user={user_id}")
+        logger.info(
+            "BatchEmbedder initialized for org=%s, library=%s, user=%s",
+            organization_id or "N/A",
+            library,
+            user_id or "N/A"
+        )
     
     def list_files_in_folders(self, bucket_name: str, folders: List[str]) -> List[Dict[str, str]]:
         """
@@ -125,7 +133,7 @@ class BatchEmbedder:
                     library=self.library,
                     organization_id=self.organization_id,
                     bucket_name=bucket_name,
-                    user_id=self.user_id or "",
+                    user_id=self.user_id,
                     storage_path=storage_path,
                     content_type=file_info['content_type'],
                     overwrite=overwrite

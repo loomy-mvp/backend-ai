@@ -21,7 +21,7 @@ from src.batch_embedder import BatchEmbedder
 logger = logging.getLogger(__name__)
 
 
-def main(bucket_name: str, folders: str, organization_id: str, library: str, user_id: str, overwrite: bool, log_level: str):
+def main(bucket_name: str, folders: str, library: str, organization_id: str | None, user_id: str | None, overwrite: bool, log_level: str):
     """Run the batch embedder with configuration"""
     
     # Parse folders from comma-separated string to list
@@ -30,7 +30,7 @@ def main(bucket_name: str, folders: str, organization_id: str, library: str, use
     logger.info(f"🚀 Starting batch embedding process")
     logger.info(f"📦 Source bucket: {bucket_name}")
     logger.info(f"📁 Folders: {', '.join(folder_list)}")
-    logger.info(f"🏢 Organization: {organization_id}")
+    logger.info(f"🏢 Organization: {organization_id or 'N/A'}")
     logger.info(f"📚 Library: {library}")
     if user_id:
         logger.info(f"👤 User: {user_id}")
@@ -40,8 +40,8 @@ def main(bucket_name: str, folders: str, organization_id: str, library: str, use
     try:
         # Initialize batch embedder
         embedder = BatchEmbedder(
-            organization_id=organization_id,
             library=library,
+            organization_id=organization_id,
             user_id=user_id
         )
         
@@ -104,8 +104,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--organization-id",
         type=str,
-        required=True,
-        help="Organization identifier"
+        required=False,
+        default=None,
+        help="Organization identifier (required for organization/private libraries)"
     )
     parser.add_argument(
         "--library",
@@ -143,9 +144,20 @@ if __name__ == "__main__":
         force=True  # Override any existing configuration
     )
     
-    # Validate library and user_id combination
+    # Validate combinations
+    if args.library in ("organization", "private") and not args.organization_id:
+        logger.error("❌ --organization-id is required when --library is organization or private")
+        sys.exit(1)
     if args.library == "private" and not args.user_id:
         logger.error("❌ --user-id is required when --library is private")
         sys.exit(1)
     
-    main(args.bucket_name, args.folders, args.organization_id, args.library, args.user_id, args.overwrite, args.log_level)
+    main(
+        bucket_name=args.bucket_name,
+        folders=args.folders,
+        library=args.library,
+        organization_id=args.organization_id,
+        user_id=args.user_id,
+        overwrite=args.overwrite,
+        log_level=args.log_level
+    )
