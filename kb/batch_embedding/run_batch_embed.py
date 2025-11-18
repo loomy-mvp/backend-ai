@@ -21,7 +21,17 @@ from src.batch_embedder import BatchEmbedder
 logger = logging.getLogger(__name__)
 
 
-def main(bucket_name: str, folders: str, library: str, organization_id: str | None, user_id: str | None, overwrite: bool, log_level: str):
+def main(
+    bucket_name: str,
+    folders: str,
+    library: str,
+    organization_id: str | None,
+    user_id: str | None,
+    overwrite: bool,
+    log_level: str,
+    failure_log_bucket: str | None,
+    failure_log_blob: str | None,
+):
     """Run the batch embedder with configuration"""
     
     # Parse folders from comma-separated string to list
@@ -36,13 +46,17 @@ def main(bucket_name: str, folders: str, library: str, organization_id: str | No
         logger.info(f"👤 User: {user_id}")
     logger.info(f"🔄 Overwrite: {overwrite}")
     logger.info(f"📊 Log level: {log_level}")
+    if failure_log_bucket and failure_log_blob:
+        logger.info(f"📝 Failure log: gs://{failure_log_bucket}/{failure_log_blob}")
     
     try:
         # Initialize batch embedder
         embedder = BatchEmbedder(
             library=library,
             organization_id=organization_id,
-            user_id=user_id
+            user_id=user_id,
+            failure_log_bucket=failure_log_bucket,
+            failure_log_blob=failure_log_blob,
         )
         
         # Process all files
@@ -134,6 +148,18 @@ if __name__ == "__main__":
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging level (default: INFO)"
     )
+    parser.add_argument(
+        "--failure-log-bucket",
+        type=str,
+        default="loomy-public-documents",
+        help="GCS bucket for failed embedding report"
+    )
+    parser.add_argument(
+        "--failure-log-blob",
+        type=str,
+        default="utils/queues/failed_embedding.txt",
+        help="Blob path for failed embedding report"
+    )
     
     args = parser.parse_args()
     
@@ -159,5 +185,7 @@ if __name__ == "__main__":
         organization_id=args.organization_id,
         user_id=args.user_id,
         overwrite=args.overwrite,
-        log_level=args.log_level
+        log_level=args.log_level,
+        failure_log_bucket=args.failure_log_bucket,
+        failure_log_blob=args.failure_log_blob,
     )

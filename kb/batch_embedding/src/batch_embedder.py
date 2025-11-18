@@ -5,8 +5,9 @@ import logging
 import os
 import sys
 import mimetypes
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pathlib import Path
+from datetime import datetime
 
 from google.cloud import storage
 from google.oauth2 import service_account
@@ -25,7 +26,14 @@ logger = logging.getLogger(__name__)
 class BatchEmbedder:
     """Handles batch embedding of documents from GCS to Pinecone."""
     
-    def __init__(self, library: str, organization_id: str | None = None, user_id: str | None = None):
+    def __init__(
+        self,
+        library: str,
+        organization_id: str | None = None,
+        user_id: str | None = None,
+        failure_log_bucket: Optional[str] = None,
+        failure_log_blob: Optional[str] = None,
+    ):
         if library not in ["organization", "private", "public"]:
             raise ValueError("library must be 'organization', 'private', or 'public'")
 
@@ -38,6 +46,8 @@ class BatchEmbedder:
         self.organization_id = organization_id
         self.library = library
         self.user_id = user_id
+        self.failure_log_bucket = failure_log_bucket
+        self.failure_log_blob = failure_log_blob
         
         # Initialize GCS client with credentials
         # Try to use explicit credentials from env var first, otherwise use default credentials
@@ -194,4 +204,55 @@ class BatchEmbedder:
                 stats['failed'] += 1
                 stats['errors'].append({'file': storage_path, 'step': 'general', 'error': str(e)})
         
+        if stats['errors']:
+            self._write_failure_report(stats['errors'])
+        else:
+            self._clear_failure_report()
+
         return stats
+
+    def _write_failure_report(self, failures: List[Dict[str, Any]]) -> None:
+        """Persist newline-delimited failure list to GCS for downstream monitoring."""
+        if not (self.failure_log_bucket and self.failure_log_blob):
+            logger.debug("Failure log destination not configured; skipping upload")
+            return
+        timestamp = datetime.utcnow().isoformat()
+        lines = [
+            f"{failure.get('file', 'unknown')} | {failure.get('step', 'unknown')} | {failure.get('error', 'unknown')}"
+            for failure in failures
+        ]
+        payload = (
+            f"# Failed embeddings at {timestamp}Z\n"
+            + "\n".join(lines)
+            + "\n"
+        )
+
+        try:
+            bucket = self.storage_client.bucket(self.failure_log_bucket)
+            blob = bucket.blob(self.failure_log_blob)
+            blob.upload_from_string(payload, content_type="text/plain")
+            logger.info(
+                "Uploaded failure report (%d entries) to gs://%s/%s",
+                len(failures),
+                self.failure_log_bucket,
+                self.failure_log_blob
+            )
+        except Exception as exc:
+            logger.error("Unable to write failure report to GCS: %s", exc)
+
+    def _clear_failure_report(self) -> None:
+        """Remove stale failure report so queue stays empty when all documents succeed."""
+        if not (self.failure_log_bucket and self.failure_log_blob):
+            return
+        try:
+            bucket = self.storage_client.bucket(self.failure_log_bucket)
+            blob = bucket.blob(self.failure_log_blob)
+            if blob.exists():
+                blob.delete()
+                logger.info(
+                    "Cleared previous failure report from gs://%s/%s",
+                    self.failure_log_bucket,
+                    self.failure_log_blob
+                )
+        except Exception as exc:
+            logger.warning("Unable to clear failure report blob: %s", exc)
