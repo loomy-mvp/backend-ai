@@ -1,0 +1,1 @@
+"""CCIA Modena scraper package."""
