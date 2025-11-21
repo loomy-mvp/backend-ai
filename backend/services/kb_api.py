@@ -91,23 +91,42 @@ class DeleteFileRequest(BaseModel):
     filename: str | None = None
 
 
-def delete_public_document(storage_path: str, bucket_name: str = "loomy-public-documents") -> None:
-    """Delete a document from the public bucket and remove its vectors from Pinecone."""
-    # GCS
-    if not storage_path or not storage_path.strip():
-        raise ValueError("storage_path is required")
+def delete_public_document(
+    storage_path: str | None = None,
+    *,
+    source: str | None = None,
+    bucket_name: str = "loomy-public-documents",
+) -> None:
+    """Delete public content from GCS (when storage_path provided) and matching vectors from Pinecone."""
+    if not storage_path and not source:
+        raise ValueError("Either storage_path or source is required")
+    if storage_path and source:
+        raise ValueError("Provide only storage_path or source, not both")
 
-    normalized_path = storage_path.lstrip("/")
-    if not normalized_path:
-        raise ValueError("storage_path cannot be empty")
+    normalized_path: str | None = None
 
-    bucket = storage_client.get_bucket(bucket_name)
-    blob = bucket.blob(normalized_path)
-    if not blob.exists():
-        raise FileNotFoundError(f"Document {normalized_path} not found in {bucket_name}")
+    # GCS (only when deleting a specific file)
+    if storage_path:
+        if not storage_path.strip():
+            raise ValueError("storage_path is required")
 
-    blob.delete()
-    logger.info(f"[delete_public_document] Deleted file from GCS: {normalized_path}")
+        normalized_path = storage_path.lstrip("/")
+        if not normalized_path:
+            raise ValueError("storage_path cannot be empty")
+
+        bucket = storage_client.get_bucket(bucket_name)
+        blob = bucket.blob(normalized_path)
+        if not blob.exists():
+            raise FileNotFoundError(f"Document {normalized_path} not found in {bucket_name}")
+
+        blob.delete()
+        logger.info(f"[delete_public_document] Deleted file from GCS: {normalized_path}")
+
+    normalized_source: str | None = None
+    if source:
+        normalized_source = source.strip()
+        if not normalized_source:
+            raise ValueError("source cannot be empty")
 
     # Pinecone
     index_name = "public"
@@ -120,16 +139,22 @@ def delete_public_document(storage_path: str, bucket_name: str = "loomy-public-d
 
     try:
         index = pc.Index(name=index_name)
-        delete_response = index.delete(filter={"storage_path": {"$eq": normalized_path}})
+        if normalized_path:
+            filter_clause = {"storage_path": {"$eq": normalized_path}}
+        else:
+            filter_clause = {"source": {"$eq": normalized_source}}
+
+        delete_response = index.delete(filter=filter_clause)
         pinecone_deleted = (
             delete_response.get("deleted_count", 0)
             if isinstance(delete_response, dict)
             else 0
         )
         logger.info(
-            "[delete_public_document] Deleted %s vectors from Pinecone for %s",
+            "[delete_public_document] Deleted %s vectors from Pinecone using %s=%s",
             pinecone_deleted,
-            normalized_path,
+            "storage_path" if normalized_path else "source",
+            normalized_path or normalized_source,
         )
     except Exception as exc:
         logger.error("[delete_public_document] Error deleting from Pinecone: %s", exc, exc_info=True)
