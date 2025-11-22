@@ -5,13 +5,13 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements and install dependencies
-COPY fondazione-nazionale-commercialisti/requirements.txt .
+COPY kb/scraping/fondazione-nazionale-commercialisti/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the scraping module with correct paths
-COPY fondazione-nazionale-commercialisti/src/ ./src/
-COPY utils/ ./src/utils/
-COPY fondazione-nazionale-commercialisti/run_scraper.py .
+COPY kb/scraping/fondazione-nazionale-commercialisti/src/ ./src/
+COPY kb/scraping/utils/ ./src/utils/
+COPY kb/scraping/fondazione-nazionale-commercialisti/run_scraper.py .
 
 # Set Python path
 ENV PYTHONPATH=/app

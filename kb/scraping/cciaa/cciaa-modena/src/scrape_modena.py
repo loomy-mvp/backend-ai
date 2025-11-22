@@ -65,14 +65,16 @@ class ModenaStatutoScraper:
     def __init__(
         self,
         bucket_name: str,
-        base_folder: str = "ccia-modena/statuto-regolamenti",
+        base_folder: str = "cciaa/cciaa-modena/statuto-regolamenti",
         storage_client: Optional[storage.Client] = None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self.bucket_name = bucket_name
-        self.base_folder = base_folder.strip("/") or "ccia-modena"
+        self.base_folder = base_folder.strip("/") or "cciaa/cciaa-modena/statuto-regolamenti"
         self.storage_client = storage_client or self._build_storage_client()
         self.logger = logger or logging.getLogger(self.__class__.__name__)
+        self.bucket = self.storage_client.bucket(self.bucket_name)
+        self.stop_requested = False
 
     def _build_storage_client(self) -> storage.Client:
         creds_env = os.getenv("GCP_SERVICE_ACCOUNT_CREDENTIALS")
@@ -96,8 +98,17 @@ class ModenaStatutoScraper:
             links = self._get_statuto_links(session)
             summary["documents_found"] = len(links)
             for title, url in links:
+                if self.stop_requested:
+                    break
                 summary["documents_processed"] += 1
                 self.logger.info("Processing '%s'", title)
+                filename = self._build_filename(title, url)
+                if self._blob_exists(filename):
+                    self.logger.info(
+                        "🛑 '%s' already present in GCS; stopping scraper.", filename
+                    )
+                    self.stop_requested = True
+                    break
                 pdf_data = self._fetch_pdf(session, url)
                 if not pdf_data:
                     summary["download_failures"] += 1
@@ -106,7 +117,6 @@ class ModenaStatutoScraper:
                 if not text_content.strip():
                     summary["empty_documents"] += 1
                     continue
-                filename = self._build_filename(title, url)
                 try:
                     self._upload_text_content(text_content, filename)
                     summary["documents_uploaded"] += 1
@@ -199,6 +209,11 @@ class ModenaStatutoScraper:
             if slug:
                 return f"{slug}.txt"
         return "document.txt"
+
+    def _blob_exists(self, filename: str) -> bool:
+        folder = self.base_folder.strip("/").replace("\\", "/") if self.base_folder else ""
+        blob_path = f"{folder}/{filename}" if folder else filename
+        return self.bucket.get_blob(blob_path) is not None
 
     def _upload_text_content(self, text: str, filename: str) -> None:
         pdf_obj = {

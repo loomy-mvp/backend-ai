@@ -1,4 +1,4 @@
-"""Runner script for the CCIA Modena Statuto scraper."""
+"""Runner script for the CCIAA Modena Statuto scraper."""
 
 import argparse
 import logging
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def main(bucket_name: str, base_folder: str, log_level: str) -> int:
-    logger.info("🚀 Starting CCIA Modena Statuto scraper")
+    logger.info("🚀 Starting CCIAA Modena Statuto scraper")
     logger.info("📦 Target bucket: %s", bucket_name)
     logger.info("📁 Base folder: %s", base_folder)
     logger.info("📊 Log level: %s", log_level)
@@ -40,7 +40,7 @@ def main(bucket_name: str, base_folder: str, log_level: str) -> int:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run the CCIA Modena Statuto scraper")
+    parser = argparse.ArgumentParser(description="Run the CCIAA Modena Statuto scraper")
     parser.add_argument(
         "--bucket-name",
         type=str,
@@ -50,7 +50,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--base-folder",
         type=str,
-        default="ccia-modena/statuto-regolamenti",
+        default="cciaa-modena/statuto-regolamenti",
         help="Folder inside the bucket where text files will be stored",
     )
     parser.add_argument(

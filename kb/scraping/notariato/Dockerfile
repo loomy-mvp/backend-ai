@@ -5,13 +5,13 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements and install dependencies
-COPY notariato/requirements.txt .
+COPY kb/scraping/notariato/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the scraping module with correct paths
-COPY notariato/src/ ./src/
-COPY utils/ ./src/utils/
-COPY notariato/run_scraper.py .
+COPY kb/scraping/notariato/src/ ./src/
+COPY kb/scraping/utils/ ./src/utils/
+COPY kb/scraping/notariato/run_scraper.py .
 
 # Set Python path
 ENV PYTHONPATH=/app

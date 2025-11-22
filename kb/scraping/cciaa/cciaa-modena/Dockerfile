@@ -2,12 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY ccia-modena/requirements.txt ./requirements.txt
+COPY kb/scraping/ccia/ccia-modena/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ccia-modena/src/ ./src/
-COPY utils/ ./src/utils/
-COPY ccia-modena/run_scraper.py ./
+COPY kb/scraping/ccia/ccia-modena/src/ ./src/
+COPY kb/scraping/utils/ ./src/utils/
+COPY kb/scraping/ccia/ccia-modena/run_scraper.py ./
 
 ENV PYTHONPATH=/app
 

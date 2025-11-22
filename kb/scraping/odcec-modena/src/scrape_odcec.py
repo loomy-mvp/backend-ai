@@ -105,6 +105,8 @@ class ODCECModenaScraper:
         self.downloaded: Set[str] = set()
         self.session = make_download_session()
         self.driver = None
+        self.stop_requested = False
+        self.bucket = self.storage_client.bucket(self.bucket_name)
         
     def _init_driver(self):
         """Initialize Selenium WebDriver with Chrome"""
@@ -133,11 +135,14 @@ class ODCECModenaScraper:
             finally:
                 self.driver = None
     
-    def download_and_upload_pdf(self, url: str, cookies_from_browser: list) -> bool:
+    def download_and_upload_pdf(self, url: str, cookies_from_browser: list) -> Optional[bool]:
         """
         Download PDF from URL and upload to GCS
-        Returns True if successful, False otherwise
+        Returns True if successful, False if the download/upload failed,
+        and None when the scraper should stop due to an existing blob
         """
+        if self.stop_requested:
+            return False
         # Skip if already downloaded
         if url in self.downloaded:
             logger.debug(f"Skipping duplicate URL: {url}")
@@ -164,6 +169,12 @@ class ODCECModenaScraper:
         # Ensure .pdf extension
         if not filename.lower().endswith('.pdf'):
             filename += '.pdf'
+        if self._blob_exists(filename):
+            logger.info(
+                "🛑 Found existing blob for '%s'; stopping scraper.", filename
+            )
+            self.stop_requested = True
+            return None
         
         try:
             # Scarica con ciphers legacy (fix DH_KEY_TOO_SMALL)
@@ -202,6 +213,14 @@ class ODCECModenaScraper:
         except Exception as e:
             logger.error(f"✖ Error downloading {url}: {e}")
             return False
+
+    def _normalize_folder(self, folder: str) -> str:
+        return folder.strip("/").replace("\\", "/") if folder else ""
+
+    def _blob_exists(self, filename: str) -> bool:
+        normalized_folder = self._normalize_folder(self.base_folder)
+        blob_path = f"{normalized_folder}/{filename}" if normalized_folder else filename
+        return self.bucket.get_blob(blob_path) is not None
     
     def scrape(self) -> dict:
         """
@@ -228,6 +247,8 @@ class ODCECModenaScraper:
             page = 1
             
             while True:
+                if self.stop_requested:
+                    break
                 # Attende caricamento lista risultati con almeno un link "scarica"
                 WebDriverWait(self.driver, 30).until(
                     EC.presence_of_all_elements_located(
@@ -254,20 +275,29 @@ class ODCECModenaScraper:
                 # Scarica ciascun PDF
                 cookies_list = self.driver.get_cookies()  # cookie ASP.NET_SessionId ecc.
                 for href in hrefs:
+                    if self.stop_requested:
+                        break
                     if href in self.downloaded:
                         stats["pdf_skipped"] += 1
                         continue
                     
                     success = self.download_and_upload_pdf(href, cookies_list)
-                    if success:
+                    if success is True:
                         stats["pdf_uploaded"] += 1
-                    else:
+                    elif success is False:
                         stats["pdf_errors"] += 1
+                    else:
+                        stats["pdf_skipped"] += 1
+                        break
+                if self.stop_requested:
+                    break
                 
                 stats["pages_processed"] += 1
                 
                 # Tenta di andare alla pagina successiva (pulsante 'Avanti' / 'Successivo' / »)
                 moved = False
+                if self.stop_requested:
+                    break
                 for xpath in [
                     "//a[contains(translate(.,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'avanti')]",
                     "//a[contains(translate(.,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'successiv')]",
@@ -286,6 +316,8 @@ class ODCECModenaScraper:
                         time.sleep(1.2)
                         break
                 
+                if self.stop_requested:
+                    break
                 if not moved:
                     logger.info("Fine elenco: nessuna pagina successiva trovata.")
                     break

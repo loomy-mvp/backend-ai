@@ -13,7 +13,7 @@ from src.scrape_modena import ModenaStatutoScraper
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
     bucket_name = os.getenv("GCS_BUCKET_NAME", "loomy-public-documents")
-    base_folder = os.getenv("CCIA_MODENA_BASE_FOLDER", "ccia-modena/statuto-regolamenti")
+    base_folder = os.getenv("CCIAA_MODENA_BASE_FOLDER", "cciaa/cciaa-modena/statuto-regolamenti")
     scraper = ModenaStatutoScraper(bucket_name=bucket_name, base_folder=base_folder)
     summary = scraper.scrape()
     logging.info("Summary: %s", json.dumps(summary, indent=2))

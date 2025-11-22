@@ -30,13 +30,13 @@ RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1) \
 WORKDIR /app
 
 # Copy requirements and install dependencies
-COPY inps/requirements.txt .
+COPY kb/scraping/inps/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the scraping module with correct paths
-COPY inps/src/ ./src/
-COPY utils/ ./src/utils/
-COPY inps/run_scraper.py .
+COPY kb/scraping/inps/src/ ./src/
+COPY kb/scraping/utils/ ./src/utils/
+COPY kb/scraping/inps/run_scraper.py .
 
 # Set Python path
 ENV PYTHONPATH=/app

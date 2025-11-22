@@ -10,7 +10,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Set, List, Dict, Optional
+from typing import Set, List, Dict, Optional, Tuple
 from urllib.parse import urljoin, urlparse, unquote
 
 import aiohttp
@@ -75,6 +75,8 @@ class RisoluzioniScraper:
         self.file_paths: Dict[str, str] = {}  # Maps file URL to its hierarchy path
         self.files_by_year: Dict[str, int] = {}  # Tracks count of files per year
         self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.stop_requested = False
+        self.bucket = self.storage_client.bucket(self.bucket_name)
         
     async def fetch_page(self, session: aiohttp.ClientSession, url: str) -> Optional[str]:
         """Fetch a page with retry logic"""
@@ -91,6 +93,8 @@ class RisoluzioniScraper:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
     async def download_file(self, session: aiohttp.ClientSession, url: str, file_path: str) -> bool:
         """Download a file with retry logic"""
+        if self.stop_requested:
+            return False
         async with self.semaphore:
             try:
                 logger.info(f"Downloading: {url}")
@@ -122,13 +126,8 @@ class RisoluzioniScraper:
             True if upload successful, False otherwise
         """
         try:
-            # Extract filename and extension from file_path
-            path_obj = Path(file_path)
-            filename = path_obj.name
-            folder_path = str(path_obj.parent) if path_obj.parent != Path('.') else ""
-            
-            # Get file extension without the dot
-            extension = path_obj.suffix.lstrip('.')
+            full_folder, filename, _ = self._build_gcs_location(file_path)
+            extension = Path(file_path).suffix.lstrip('.')
             
             # Create pdf_obj structure expected by upload_to_storage
             pdf_obj = {
@@ -138,8 +137,6 @@ class RisoluzioniScraper:
             }
             
             # Combine base_folder with the year/month path
-            full_folder = f"{self.base_folder}/{folder_path}" if folder_path else self.base_folder
-            
             # Upload using the existing utility function
             upload_to_storage(
                 storage_client=self.storage_client,
@@ -154,6 +151,22 @@ class RisoluzioniScraper:
         except Exception as e:
             logger.error(f"❌ Failed to upload {file_path} to GCS: {e}")
             return False
+
+    def _normalize_folder(self, folder: str) -> str:
+        return folder.strip("/").replace("\\", "/") if folder else ""
+
+    def _build_gcs_location(self, file_path: str) -> Tuple[str, str, str]:
+        path_obj = Path(file_path)
+        filename = path_obj.name
+        folder_path = str(path_obj.parent) if path_obj.parent != Path(".") else ""
+        full_folder = f"{self.base_folder}/{folder_path}" if folder_path else self.base_folder
+        normalized_folder = self._normalize_folder(full_folder)
+        blob_path = f"{normalized_folder}/{filename}" if normalized_folder else filename
+        return full_folder, filename, blob_path
+
+    def _already_uploaded(self, file_path: str) -> bool:
+        _, _, blob_path = self._build_gcs_location(file_path)
+        return self.bucket.get_blob(blob_path) is not None
     
     def get_file_extension(self, url: str) -> Optional[str]:
         """
@@ -371,6 +384,8 @@ class RisoluzioniScraper:
     
     async def crawl_page(self, session: aiohttp.ClientSession, url: str):
         """Crawl a single page and process its links"""
+        if self.stop_requested:
+            return
         if url in self.visited_urls:
             return
         
@@ -387,9 +402,17 @@ class RisoluzioniScraper:
         # Download files
         download_tasks = []
         for file_url, hierarchy, link_text in file_links:
+            if self.stop_requested:
+                break
             if file_url not in self.downloaded_files:
-                self.downloaded_files.add(file_url)
                 file_path = self.generate_file_path(file_url, hierarchy, link_text)
+                if self._already_uploaded(file_path):
+                    logger.info(
+                        "🛑 Found existing blob for '%s'; stopping scraper.", file_path
+                    )
+                    self.stop_requested = True
+                    break
+                self.downloaded_files.add(file_url)
                 self.file_paths[file_url] = file_path
                 
                 # Track files by year
@@ -404,10 +427,14 @@ class RisoluzioniScraper:
         if download_tasks:
             logger.info(f"⬇️  Starting download of {len(download_tasks)} files from this page")
             await asyncio.gather(*download_tasks, return_exceptions=True)
+        if self.stop_requested:
+            return
         
         # Recursively crawl navigation links
         crawl_tasks = []
         for nav_url in navigation_links:
+            if self.stop_requested:
+                break
             if nav_url not in self.visited_urls:
                 task = self.crawl_page(session, nav_url)
                 crawl_tasks.append(task)

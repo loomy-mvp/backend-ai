@@ -508,6 +508,8 @@ class INPSScraper:
         self.files_by_year: dict = {}
         self.total_downloaded = 0
         self.total_errors = 0
+        self.stop_requested = False
+        self.bucket = self.storage_client.bucket(self.bucket_name)
     
     def upload_pdf_to_gcs(self, pdf_bytes: bytes, year: str, tipo: str, filename: str) -> bool:
         """Upload a PDF to GCS in the appropriate folder structure.
@@ -552,6 +554,15 @@ class INPSScraper:
         except Exception as e:
             logger.error(f"Failed to upload to GCS: {e}")
             return False
+
+    def _normalize_folder(self, folder: str) -> str:
+        return folder.strip("/").replace("\\", "/") if folder else ""
+
+    def _blob_exists(self, year: str, tipo: str, filename: str) -> bool:
+        folder = f"{self.base_folder}/{year}/{tipo}"
+        normalized_folder = self._normalize_folder(folder)
+        blob_path = f"{normalized_folder}/{filename}" if normalized_folder else filename
+        return self.bucket.get_blob(blob_path) is not None
     
     def download_page_links(
         self,
@@ -560,7 +571,11 @@ class INPSScraper:
         page_idx: int,
     ):
         """Visit each detail link on the page and download the PDF if not already processed."""
+        if self.stop_requested:
+            return
         for detail_url in links:
+            if self.stop_requested:
+                break
             # Skip if previously downloaded or errored
             if detail_url in self.downloaded_urls or detail_url in self.error_urls:
                 continue
@@ -585,6 +600,15 @@ class INPSScraper:
                         filename = re.sub(r'[<>:"/\\|?*]', '_', h1)[:200] + ".pdf"
                     except:
                         filename = Path(pdf_url).name or f"document_{len(self.downloaded_urls)}.pdf"
+                    if self._blob_exists(year, tipo, filename):
+                        logger.info(
+                            "🛑 Existing document detected at %s/%s/%s; stopping scraper.",
+                            year,
+                            tipo,
+                            filename,
+                        )
+                        self.stop_requested = True
+                        return
                     
                     # Download PDF to memory
                     pdf_bytes = download_pdf_to_memory(driver, pdf_url)
@@ -639,12 +663,17 @@ class INPSScraper:
             pages_without_change = 0
             
             while page_idx <= self.max_pages:
+                if self.stop_requested:
+                    break
                 first_el = get_first_link_webelement(driver)
                 page_links = collect_detail_links(driver)
                 logger.info(f"[Pagina {page_idx}] link trovati: {len(page_links)}")
                 
                 before = len(self.downloaded_urls)
                 self.download_page_links(driver, page_links, page_idx)
+                if self.stop_requested:
+                    logger.info("🛑 Existing document found in GCS; stopping scrape loop.")
+                    break
                 after = len(self.downloaded_urls)
                 
                 if after == before:
@@ -657,6 +686,8 @@ class INPSScraper:
                     logger.info("[Stop] Nessun nuovo link in 2 pagine consecutive. Fine.")
                     break
                 
+                if self.stop_requested:
+                    break
                 # Navigate to next page
                 moved = goto_next_page_if_any(driver, prev_first_el=first_el)
                 if not moved:

@@ -8,11 +8,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
-COPY requirements.txt .
+COPY kb/scraping/sentenze-cassazione/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy source code
-COPY src/ ./src/
+COPY kb/scraping/sentenze-cassazione/src/ ./src/
 
 # Set environment variable for Cloud Run
 ENV PYTHONUNBUFFERED=1

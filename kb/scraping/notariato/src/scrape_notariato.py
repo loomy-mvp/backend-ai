@@ -106,6 +106,8 @@ class NotariatoScraper:
         self.file_paths: Dict[str, str] = {}
         self.files_by_year: Dict[str, int] = {}
         self.semaphore = asyncio.Semaphore(max_concurrent)
+        self.stop_requested = False
+        self.bucket = self.storage_client.bucket(self.bucket_name)
 
     async def fetch_page(self, session: aiohttp.ClientSession, url: str) -> Optional[str]:
         """Fetch the HTML content of a page.
@@ -160,6 +162,8 @@ class NotariatoScraper:
         bool
             ``True`` if the file was uploaded successfully, ``False`` otherwise.
         """
+        if self.stop_requested:
+            return False
         async with self.semaphore:
             try:
                 logger.info(f"Downloading file: {url}")
@@ -199,20 +203,14 @@ class NotariatoScraper:
             ``True`` if the upload succeeded, ``False`` otherwise.
         """
         try:
-            path_obj = Path(file_path)
-            filename = path_obj.name
-            # Directory path relative to base_folder, or empty string
-            folder_path = str(path_obj.parent) if path_obj.parent != Path(".") else ""
-            extension = path_obj.suffix.lstrip(".")
+            full_folder, filename, _ = self._build_gcs_location(file_path)
+            extension = Path(file_path).suffix.lstrip(".")
             pdf_obj = {
                 "name": filename,
                 "bytes": content,
                 "extension": extension,
             }
             # Compose folder prefix in GCS
-            full_folder = (
-                f"{self.base_folder}/{folder_path}" if folder_path else self.base_folder
-            )
             upload_to_storage(
                 storage_client=self.storage_client,
                 bucket_name=self.bucket_name,
@@ -223,6 +221,22 @@ class NotariatoScraper:
         except Exception as exc:
             logger.error(f"❌ Failed to upload {file_path} to GCS: {exc}")
             return False
+
+    def _normalize_folder(self, folder: str) -> str:
+        return folder.strip("/").replace("\\", "/") if folder else ""
+
+    def _build_gcs_location(self, file_path: str) -> Tuple[str, str, str]:
+        path_obj = Path(file_path)
+        filename = path_obj.name
+        folder_path = str(path_obj.parent) if path_obj.parent != Path(".") else ""
+        full_folder = f"{self.base_folder}/{folder_path}" if folder_path else self.base_folder
+        normalized_folder = self._normalize_folder(full_folder)
+        blob_path = f"{normalized_folder}/{filename}" if normalized_folder else filename
+        return full_folder, filename, blob_path
+
+    def _already_uploaded(self, file_path: str) -> bool:
+        _, _, blob_path = self._build_gcs_location(file_path)
+        return self.bucket.get_blob(blob_path) is not None
 
     def get_file_extension(self, url: str) -> Optional[str]:
         """Return the file extension if ``url`` points to a target file.
@@ -409,6 +423,8 @@ class NotariatoScraper:
 
     async def crawl_page(self, session: aiohttp.ClientSession, url: str) -> None:
         """Recursively crawl a page and process its links."""
+        if self.stop_requested:
+            return
         if url in self.visited_urls:
             return
         self.visited_urls.add(url)
@@ -423,9 +439,17 @@ class NotariatoScraper:
         
         # Schedule file downloads
         for file_url, link_text in file_links:
+            if self.stop_requested:
+                break
             if file_url not in self.downloaded_files:
-                self.downloaded_files.add(file_url)
                 file_path = self.generate_file_path(file_url, link_text)
+                if self._already_uploaded(file_path):
+                    logger.info(
+                        "🛑 Found existing blob for '%s'; stopping scraper.", file_path
+                    )
+                    self.stop_requested = True
+                    break
+                self.downloaded_files.add(file_url)
                 self.file_paths[file_url] = file_path
                 
                 # Track counts by year
@@ -440,10 +464,14 @@ class NotariatoScraper:
         if download_tasks:
             logger.info(f"⬇️  Starting download of {len(download_tasks)} file(s) from this page")
             await asyncio.gather(*download_tasks, return_exceptions=True)
+        if self.stop_requested:
+            return
         
         # Traverse child pages
         crawl_tasks: List[asyncio.Task] = []
         for nav_url in navigation_links:
+            if self.stop_requested:
+                break
             if nav_url not in self.visited_urls:
                 crawl_tasks.append(asyncio.create_task(self.crawl_page(session, nav_url)))
         

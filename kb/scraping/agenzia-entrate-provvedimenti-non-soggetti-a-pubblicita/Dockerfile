@@ -5,13 +5,13 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Copy requirements and install dependencies
-COPY requirements.txt .
+COPY kb/scraping/agenzia-entrate-provvedimenti-non-soggetti-a-pubblicita/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the scraping module with correct paths
-COPY agenzia-entrate-provvedimenti-non-soggetti-a-pubblicita/src/ ./src/
-COPY utils/ ./src/utils/
-COPY agenzia-entrate-provvedimenti-non-soggetti-a-pubblicita/run_scraper.py .
+COPY kb/scraping/agenzia-entrate-provvedimenti-non-soggetti-a-pubblicita/src/ ./src/
+COPY kb/scraping/utils/ ./src/utils/
+COPY kb/scraping/agenzia-entrate-provvedimenti-non-soggetti-a-pubblicita/run_scraper.py .
 
 # Set Python path
 ENV PYTHONPATH=/app
