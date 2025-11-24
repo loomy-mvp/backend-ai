@@ -20,6 +20,12 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
         ModelProvider.GOOGLE: ("langchain_google_vertexai", "ChatVertexAI", "max_output_tokens"),
         # Add more providers as needed
     }
+    # Provider-specific logging opt-out parameters to keep requests private by default
+    privacy_overrides = {
+        ModelProvider.OPENAI: {"default_headers": {"OpenAI-Data-Opt-Out": "true"}},
+        ModelProvider.ANTHROPIC: {"metadata": {"anthropic-beta": "do-not-log"}},
+        ModelProvider.GOOGLE: {"safety_settings": {"logging": "NONE"}},
+    }
     
     if provider is None:
         provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
@@ -27,6 +33,12 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
         model = get_config_value(config_set=CHATBOT_CONFIG, key="model")
     if max_tokens is None:
         max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens")
+
+    if isinstance(provider, str):
+        try:
+            provider = ModelProvider(provider)
+        except ValueError as exc:
+            raise ValueError(f"Unsupported provider: {provider}") from exc
 
     if provider not in provider_mapping:
         raise ValueError(f"Unsupported provider: {provider}")
@@ -44,6 +56,9 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
             "temperature": temperature,
             max_tokens_param: max_tokens
         }
+        opt_out_kwargs = privacy_overrides.get(provider)
+        if opt_out_kwargs:
+            kwargs.update(opt_out_kwargs)
         
         return llm_class(**kwargs)
         
