@@ -1,0 +1,1 @@
+"""Sentenze Cassazione scraper package."""

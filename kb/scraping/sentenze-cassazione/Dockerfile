@@ -1,21 +1,21 @@
+# Dockerfile for Cloud Run Job
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements
-COPY kb/scraping/sentenze-cassazione/requirements.txt .
+# Install dependencies
+COPY kb/scraping/sentenze-cassazione/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
+# Copy scraper sources (module + shared utils)
 COPY kb/scraping/sentenze-cassazione/src/ ./src/
+COPY kb/scraping/utils/ ./src/utils/
+COPY kb/scraping/sentenze-cassazione/run_scraper.py ./
 
-# Set environment variable for Cloud Run
-ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
 
-# Run the job
-ENTRYPOINT ["python", "src/cloudrun_job_scraper.py"]
+ENTRYPOINT ["python", "run_scraper.py"]
+CMD ["--bucket-name", "loomy-public-documents", \
+     "--base-folder", "sentenze_cassazione", \
+     "--request-delay", "0.5", \
+     "--log-level", "INFO"]
