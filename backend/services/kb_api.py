@@ -63,7 +63,7 @@ class StorageRequest(BaseModel):
 class EmbedRequest(BaseModel):
     library: str  # "organization" or "private"
     organization_id: str
-    user_id: str = None  # Only required if library is "private"
+    user_id: str | None = None  # Only required if library is "private"
     storage_path: str | None = None
     content_type: str | None = None
     overwrite: bool = False # Whether to overwrite existing vectors
@@ -516,20 +516,6 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
 
         # Step 2: Embed the document
         logger.info("[process_doc_upload] Step 2: Embedding document")
-
-
-        # logging
-        embed_req_dict_for_logging = {
-            "library": upload_data['library'],
-            "organization_id": upload_data['organization_id'],
-            "user_id": upload_data['user_id'] if upload_data['library'] == "private" else None,
-            "storage_path": storage_path,
-            "content_type": upload_data.get("content_type"),
-            "overwrite": str(upload_data.get("overwrite", "false")).lower()
-        }
-        logger.info(f'{embed_req_dict_for_logging}')
-        # logging end
-
 
         embed_request = EmbedRequest(
             library=upload_data['library'],
