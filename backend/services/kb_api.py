@@ -413,22 +413,27 @@ def _embed_doc(embed_request: EmbedRequest):
                           input_type="search_document",
                           embedding_types=["float"]).embeddings.float_
 
-    vectors = [
-        Vector(
-            id=chunk["chunk_id"],
-            values=embedding,
-            metadata={
-                "page": chunk["page"],
-                "chunk_text": chunk["text"],
-                "storage_path": chunk["storage_path"],
-                "doc_name": doc_name,
-                "library": embed_request.library,
-                "organization_id": embed_request.organization_id,
-                "user_id": embed_request.user_id if embed_request.library == "private" else None,
-            },
+    vectors = []
+    for chunk, embedding in zip(chunks, embeddings):
+        metadata = {
+            "page": chunk["page"],
+            "chunk_text": chunk["text"],
+            "storage_path": chunk["storage_path"],
+            "doc_name": doc_name,
+            "library": embed_request.library,
+            "organization_id": embed_request.organization_id,
+        }
+
+        if embed_request.library == "private":
+            metadata["user_id"] = embed_request.user_id
+
+        vectors.append(
+            Vector(
+                id=chunk["chunk_id"],
+                values=embedding,
+                metadata=metadata,
+            )
         )
-        for chunk, embedding in zip(chunks, embeddings)
-    ]
 
     return {
         "status": "success",
