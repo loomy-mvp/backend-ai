@@ -73,7 +73,7 @@ class EmbedRequest(BaseModel):
 class UpsertRequest(BaseModel):
     index_name: str
     vectors: list  # list of [id, embedding]
-    namespace: str = None  # Namespace for the vectors
+    namespace: str | None = None  # Namespace for the vectors
 
 class UploadRequest(BaseModel):
     user_id: str
