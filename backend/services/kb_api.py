@@ -718,6 +718,7 @@ async def upload_doc(
 @kb_router.post("/delete-file")
 def delete_file(delete_request: DeleteFileRequest):
     """Delete a file from GCS and remove all its chunks from Pinecone vector store."""
+    logger.info(f"[delete_file] Received delete request: organization_id={delete_request.organization_id}, user_id={delete_request.user_id}, library={delete_request.library}, storage_path={delete_request.storage_path}, filename={delete_request.filename}")
     try:
         if delete_request.library not in ["organization", "private", "public"]:
             return JSONResponse(status_code=400, content={"error": "library must be 'organization', 'private', or 'public'"})
