@@ -753,7 +753,9 @@ def delete_file(delete_request: DeleteFileRequest):
 
         # Delete from GCS
         bucket = storage_client.get_bucket(bucket_name)
+        logger.info(f"[delete_file] Deleting file from GCS bucket {bucket_name}, path {normalized_path}")
         blob = bucket.blob(normalized_path)
+        logger.info(f"[delete_file] Checking existence of blob. Type: {type(blob)}")
         if not blob.exists():
             return JSONResponse(status_code=404, content={"error": "File not found in storage."})
         
