@@ -49,6 +49,8 @@ embedding_model_name = get_config_value(config_set=EMBEDDING_CONFIG, key="model"
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=pinecone_api_key)
 document_webhook_url = os.getenv("DOCUMENT_WEBHOOK_URL")
+PUBLIC_BUCKET_NAME = "loomy-public-documents"
+PUBLIC_INDEX_NAME = "public"
 
 class StorageRequest(BaseModel):
     user_id: str
@@ -61,7 +63,7 @@ class StorageRequest(BaseModel):
     overwrite: str = "false"
 
 class EmbedRequest(BaseModel):
-    library: str  # "organization" or "private"
+    library: str  # "organization", "private", or "public"
     organization_id: str
     user_id: str | None = None  # Only required if library is "private"
     storage_path: str | None = None
@@ -86,7 +88,7 @@ class UploadRequest(BaseModel):
 class DeleteFileRequest(BaseModel):
     organization_id: str
     user_id: str | None = None  # Required when library is "private"
-    library: str  # "organization" or "private"
+    library: str  # "organization", "private", or "public"
     storage_path: str | None = None
     filename: str | None = None
 
@@ -274,11 +276,17 @@ def _store_file(storage_request: StorageRequest) -> dict:
 
     overwrite_flag = str(storage_request.overwrite).lower() == "true"
 
-    bucket_name = f"bucket-{storage_request.organization_id}"
+    if storage_request.library == "public":
+        bucket_name = PUBLIC_BUCKET_NAME
+    else:
+        bucket_name = f"bucket-{storage_request.organization_id}"
 
     try:
         bucket_obj = storage_client.get_bucket(bucket_name)
-    except Exception:
+    except Exception as exc:
+        if storage_request.library == "public":
+            logger.error("[_store_file] Public bucket %s unavailable: %s", bucket_name, exc)
+            raise
         bucket_obj = storage_client.create_bucket(bucket_name)
 
     # Determine folder prefix based on library type
@@ -286,6 +294,8 @@ def _store_file(storage_request: StorageRequest) -> dict:
         folder_prefix = "organization/"
     elif storage_request.library == "private":
         folder_prefix = f"private/{storage_request.user_id}/"
+    elif storage_request.library == "public":
+        folder_prefix = ""
     else:
         folder_prefix = ""
 
@@ -319,17 +329,22 @@ def _embed_doc(embed_request: EmbedRequest):
         raise ValueError("storage_path is required to embed a document")
 
     # Validate library type
-    if embed_request.library not in ["organization", "private"]:
-        raise ValueError("library must be 'organization' or 'private'")
+    if embed_request.library not in ["organization", "private", "public"]:
+        raise ValueError("library must be 'organization', 'private', or 'public'")
 
     # Validate user_id for private library
     if embed_request.library == "private" and not embed_request.user_id:
         raise ValueError("user_id is required for private library")
 
     # Determine bucket, namespace, and index name
-    bucket_name = f"bucket-{embed_request.organization_id}"
-    namespace = "organization" if embed_request.library == "organization" else embed_request.user_id
-    index_name = embed_request.organization_id
+    if embed_request.library == "public":
+        bucket_name = PUBLIC_BUCKET_NAME
+        namespace = None
+        index_name = PUBLIC_INDEX_NAME
+    else:
+        bucket_name = f"bucket-{embed_request.organization_id}"
+        namespace = "organization" if embed_request.library == "organization" else embed_request.user_id
+        index_name = embed_request.organization_id
 
     bucket = storage_client.get_bucket(bucket_name)
     blob = bucket.blob(storage_path)
@@ -663,8 +678,8 @@ async def upload_doc(
 
     logger.info(f"[upload_doc] File {filename} received for upload by user {user_id} in organization {organization_id}")
     # Validate library type
-    if library not in ["organization", "private"]:
-        return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
+    if library not in ["organization", "private", "public"]:
+        return JSONResponse(status_code=400, content={"error": "library must be 'organization', 'private', or 'public'"})
     
     # Validate user_id for private library
     if library == "private" and not user_id:
@@ -703,20 +718,26 @@ async def upload_doc(
 def delete_file(delete_request: DeleteFileRequest):
     """Delete a file from GCS and remove all its chunks from Pinecone vector store."""
     try:
-        if delete_request.library not in ["organization", "private"]:
-            return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
+        if delete_request.library not in ["organization", "private", "public"]:
+            return JSONResponse(status_code=400, content={"error": "library must be 'organization', 'private', or 'public'"})
 
         if delete_request.library == "private" and not delete_request.user_id:
             return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
 
         # Use the same bucket naming convention as upload
-        bucket_name = f"bucket-{delete_request.organization_id}"
+        bucket_name = (
+            PUBLIC_BUCKET_NAME
+            if delete_request.library == "public"
+            else f"bucket-{delete_request.organization_id}"
+        )
         
         # Determine folder prefix based on library type (same as upload)
         if delete_request.library == "organization":
             folder_prefix = "organization/"
         elif delete_request.library == "private":
             folder_prefix = f"private/{delete_request.user_id}/"
+        elif delete_request.library == "public":
+            folder_prefix = ""
         else:
             folder_prefix = ""
 
@@ -739,8 +760,12 @@ def delete_file(delete_request: DeleteFileRequest):
         logger.info(f"[delete_file] Deleted file from GCS: {normalized_path}")
 
         # Delete chunks from Pinecone
-        index_name = delete_request.organization_id
-        namespace = "organization" if delete_request.library == "organization" else delete_request.user_id
+        if delete_request.library == "public":
+            index_name = PUBLIC_INDEX_NAME
+            namespace = None
+        else:
+            index_name = delete_request.organization_id
+            namespace = "organization" if delete_request.library == "organization" else delete_request.user_id
         
         pinecone_deleted = 0
         if pc.has_index(index_name):
@@ -773,14 +798,19 @@ def delete_file(delete_request: DeleteFileRequest):
 def download_file(download_request: DeleteFileRequest):
     """Download a file from the user's GCS bucket and return its contents."""
     try:
-        if download_request.library not in ["organization", "private"]:
-            return JSONResponse(status_code=400, content={"error": "library must be 'organization' or 'private'"})
+        if download_request.library not in ["organization", "private", "public"]:
+            return JSONResponse(status_code=400, content={"error": "library must be 'organization', 'private', or 'public'"})
 
         if download_request.library == "private" and not download_request.user_id:
             return JSONResponse(status_code=400, content={"error": "user_id is required for private library"})
 
-        bucket_suffix = "org" if download_request.library == "organization" else download_request.user_id
-        folder_prefix = "organization/" if download_request.library == "organization" else f"private/{download_request.user_id}/"
+        if download_request.library == "public":
+            bucket_name = PUBLIC_BUCKET_NAME
+            folder_prefix = ""
+        else:
+            bucket_suffix = "org" if download_request.library == "organization" else download_request.user_id
+            folder_prefix = "organization/" if download_request.library == "organization" else f"private/{download_request.user_id}/"
+            bucket_name = f"bucket-{download_request.organization_id}-{bucket_suffix}"
 
         storage_path = download_request.storage_path or download_request.filename
         if not storage_path:
@@ -790,7 +820,6 @@ def download_file(download_request: DeleteFileRequest):
         if not normalized_path.startswith(folder_prefix):
             normalized_path = folder_prefix + normalized_path
 
-        bucket_name = f"bucket-{download_request.organization_id}-{bucket_suffix}"
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(normalized_path)
         if not blob.exists():
