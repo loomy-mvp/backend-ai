@@ -295,11 +295,12 @@ def _store_file(storage_request: StorageRequest) -> dict:
     elif storage_request.library == "private":
         folder_prefix = f"private/{storage_request.user_id}/"
     elif storage_request.library == "public":
-        folder_prefix = ""
+        folder_prefix = "manual_upload/"
     else:
         folder_prefix = ""
 
-    storage_path = folder_prefix + storage_request.document_id + "-" + storage_request.filename
+    # storage_path = folder_prefix + storage_request.document_id + "-" + storage_request.filename
+    storage_path = folder_prefix + storage_request.filename
     blob = bucket_obj.blob(storage_path)
 
     if blob.exists() and not overwrite_flag:
@@ -737,7 +738,7 @@ def delete_file(delete_request: DeleteFileRequest):
         elif delete_request.library == "private":
             folder_prefix = f"private/{delete_request.user_id}/"
         elif delete_request.library == "public":
-            folder_prefix = ""
+            folder_prefix = "manual_upload/"
         else:
             folder_prefix = ""
 
@@ -776,8 +777,8 @@ def delete_file(delete_request: DeleteFileRequest):
                     namespace=namespace,
                     filter={"storage_path": {"$eq": normalized_path}}
                 )
-                pinecone_deleted = delete_response.get("deleted_count", 0) if isinstance(delete_response, dict) else 0
-                logger.info(f"[delete_file] Deleted {pinecone_deleted} vectors from Pinecone for {normalized_path}")
+                if isinstance(delete_response, dict) and not delete_response: # If delete_response is empty dict delete is successful
+                    logger.info(f"[delete_file] Deleted {normalized_path} from Pinecone")
             except Exception as e:
                 logger.error(f"[delete_file] Error deleting from Pinecone: {e}")
                 raise
@@ -806,7 +807,7 @@ def download_file(download_request: DeleteFileRequest):
 
         if download_request.library == "public":
             bucket_name = PUBLIC_BUCKET_NAME
-            folder_prefix = ""
+            folder_prefix = "manual_upload/"
         else:
             bucket_suffix = "org" if download_request.library == "organization" else download_request.user_id
             folder_prefix = "organization/" if download_request.library == "organization" else f"private/{download_request.user_id}/"
