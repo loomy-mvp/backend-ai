@@ -459,6 +459,68 @@ async def process_chat_request(chat_data: dict):
             }
         })
 
+async def process_write_request(write_data: dict):
+    """Background task to process document writing request with template."""
+    try:
+        logger.info(f"[process_write_request] Starting document writing for message_id {write_data['message_id']}")
+        
+        # Extract parameters
+        message_id = write_data["message_id"]
+        conversation_id = write_data["conversation_id"]
+        message = write_data["message"]
+        template = write_data["template"]
+        attachments = write_data.get("attachments")
+        
+        # LLM parameters
+        llm_params = {
+            "provider": write_data["provider"],
+            "model": write_data["model"],
+            "temperature": write_data["temperature"],
+            "max_tokens": write_data["max_tokens"]
+        }
+        
+        # Process attachments
+        attachment_context, attachment_count, image_inputs = _build_attachment_context(attachments)
+        logger.info(f"[process_write_request] Processed {attachment_count} text attachments and {len(image_inputs)} images")
+        
+        # If there are text attachments, append them to the message
+        if attachment_context:
+            message = f"{message}\n\n<<<User Attachments>>>\n{attachment_context}"
+        
+        # Generate document using Writer
+        response = await writer.write_document(
+            message=message,
+            template=template,
+            conversation_id=conversation_id,
+            llm_params=llm_params,
+            image_inputs=image_inputs
+        )
+        logger.info("[process_write_request] Document generated")
+        
+        # Send webhook notification with success
+        await send_chatbot_webhook({
+            "message_id": message_id,
+            "status": "generated",
+            "content": response,
+            "metadata": {"template_used": True}
+        })
+        
+        logger.info(f"[process_write_request] Document writing completed for message_id {message_id}")
+        
+    except Exception as e:
+        logger.error(f"[process_write_request] Error processing write request for message_id {write_data.get('message_id')}: {str(e)}", exc_info=True)
+        
+        # Send webhook notification with error
+        await send_chatbot_webhook({
+            "message_id": write_data.get("message_id"),
+            "status": "error",
+            "content": "",
+            "metadata": {
+                "error": str(e),
+                "conversation_id": write_data.get("conversation_id")
+            }
+        })
+
 # API Endpoints
 @chatbot_router.post("/chat", response_model=ChatResponse)
 async def chat(
@@ -540,9 +602,43 @@ async def chat(
             metadata={}
         )
 
-    # Prompt template workflow
+    # Prompt template workflow - route to document writing
     if prompt_template:
-        pass  # TODO: Implement custom prompt template handling
+        logger.info(f"[chat] Routing to document writing workflow for message_id {message_id}")
+        
+        attachment_payload = _normalize_request_attachments(attachments)
+        logger.info(
+            "[chat] Normalized %s attachment(s) for writing",
+            len(attachment_payload),
+        )
+        
+        # Prepare write data for background processing
+        write_data = {
+            "message_id": message_id,
+            "conversation_id": conversation_id,
+            "message": message,
+            "template": prompt_template,
+            "provider": provider,
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "attachments": attachment_payload
+        }
+        
+        # Add write processing to background tasks
+        background_tasks.add_task(process_write_request, write_data)
+        
+        # Return immediately with receipt
+        return ChatResponse(
+            message_id=message_id,
+            status="pending",
+            content="",
+            metadata={
+                "conversation_id": conversation_id,
+                "message": "Document writing request received and processing started. You will receive a webhook notification when complete."
+            }
+        )
+
     
     attachment_payload = _normalize_request_attachments(attachments)
     logger.info(
