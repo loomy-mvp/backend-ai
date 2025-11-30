@@ -1,0 +1,9 @@
+requests==2.31.0
+selenium==4.16.0
+google-cloud-storage==2.14.0
+google-auth==2.25.2
+google-api-core>=2.0.0
+packaging>=23.0
+urllib3>=1.26.0,<2.0.0
+beautifulsoup4==4.12.2
+python-dotenv==1.0.0
