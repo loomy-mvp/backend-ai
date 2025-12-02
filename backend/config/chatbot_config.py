@@ -8,7 +8,7 @@ CHATBOT_CONFIG = {
     "top_k": 5  # Number of relevant documents to retrieve from each kb
 }
 
-SIMILARITY_THRESHOLD = 0.5  # Minimum similarity score for retrieved documents
+SIMILARITY_THRESHOLD = 0.4  # Minimum similarity score for retrieved documents
 CHATBOT_CONFIG["temperature"] = 0.0 if not "gpt-5" in CHATBOT_CONFIG['model'] else 1
 
 EMBEDDING_CONFIG = {
