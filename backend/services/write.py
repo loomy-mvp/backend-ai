@@ -1,6 +1,4 @@
 import logging
-from typing import List
-from langchain.schema import HumanMessage
 
 from backend.config.prompts import WRITE_PROMPT_TEMPLATE
 from backend.utils.ai_workflow_utils.get_llm import get_llm
@@ -20,8 +18,7 @@ class Writer:
         template: str,
         requirements: str,
         conversation_id: str,
-        llm_params: dict,
-        image_inputs: List[dict] = None
+        llm_params: dict
     ) -> str:
         """
         Generate a document based on a template and user message.
@@ -32,7 +29,6 @@ class Writer:
             requirements: JSON formatted string with template field values
             conversation_id: Conversation ID for chat history
             llm_params: Dictionary containing provider, model, temperature, max_tokens
-            image_inputs: Optional list of image inputs
             
         Returns:
             Generated document as a string
@@ -57,16 +53,13 @@ class Writer:
             chain = create_chain(llm=llm, prompt_template=WRITE_PROMPT_TEMPLATE)
             logger.info("[write_document] Write chain created")
             
-            # Build question messages
-            question_messages = self._build_question_messages(message, image_inputs or [])
-            
             logger.info("[write_document] LLM payload prepared")
             
             # Generate document
             response = await chain.ainvoke({
                 "template": template,
                 "requirements": requirements,
-                "question_messages": question_messages,
+                "message": message,
                 "chat_history": chat_history
             })
             
@@ -76,15 +69,3 @@ class Writer:
         except Exception as e:
             logger.error(f"[write_document] Error generating document: {str(e)}", exc_info=True)
             raise
-    
-    def _build_question_messages(self, message: str, image_inputs: List[dict]) -> List[HumanMessage]:
-        """Build question messages with optional image inputs."""
-        content_parts: list = [
-            {"type": "text", "text": f"<<<Prompt>>>\n{message}"}
-        ]
-        
-        for image in image_inputs:
-            content_parts.append({"type": "text", "text": f"[Image Attachment: {image['filename']}]"})
-            content_parts.append({"type": "image_url", "image_url": {"url": image["data_url"]}})
-        
-        return [HumanMessage(content=content_parts)]

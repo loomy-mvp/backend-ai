@@ -69,6 +69,8 @@ WRITE_SYSTEM_PROMPT: Final[str] = (
     """
 Sei un esperto commercialista, consulente aziendale con una profonda conoscenza legale e di gestione aziendale.
 Il tuo compito è redigere documenti professionali seguendo rigorosamente i dati e le specifiche inserite dall'utente nel template fornito.
+Ti possono essere forniti un Template del documento, i Requisiti con i valori specifici dei campi del template e un Prompt con istruzioni aggiuntive.
+Usa ciò che ti viene fornito per creare un documento professionale e rispondente alle istruzioni.
 
 Regole:
 - Scrivi il documento in modo chiaro, professionale e ben strutturato
@@ -87,5 +89,5 @@ WRITE_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
     ("system", WRITE_SYSTEM_PROMPT),
     ("user", "<<<Template>>>\n{template}\n"),
     ("user", "<<<Requirements>>>\n{requirements}\n"),
-    MessagesPlaceholder(variable_name="question_messages")
+    ("user", "<<<Prompt>>>\n{message}\n")
 ])

@@ -1,12 +1,9 @@
 from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
-import base64
 import httpx
-import mimetypes
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -28,10 +25,6 @@ writer = Writer()
 from backend.config.chatbot_config import CHATBOT_CONFIG
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.utils.auth import verify_token
-from backend.utils.ai_workflow_utils.attachment_processing import (
-    extract_attachment_text,
-    AttachmentProcessingError,
-)
 
 write_router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -46,7 +39,6 @@ class WriteRequest(BaseModel):
     promptTemplate: str
     message: str
     requirements: Optional[str] = None  # JSON formatted string with template field values
-    attachments: List[str] = None
     test: bool = False
 
 
@@ -55,164 +47,6 @@ class WriteResponse(BaseModel):
     status: str
     content: str
     metadata: dict
-
-
-# Attachment processing constants and helpers
-TEXT_ATTACHMENT_TYPES = {"application/pdf", "text/plain"}
-TEXT_ATTACHMENT_EXTENSIONS = {".pdf", ".txt"}
-IMAGE_ATTACHMENT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
-
-
-def _decode_attachment_payload(data: str) -> tuple[bytes, Optional[str]]:
-    """Decode a base64 payload or data URL and return bytes plus inferred MIME type."""
-    if not data:
-        raise ValueError("Attachment payload is empty")
-
-    payload = data.strip()
-    if payload.startswith("data:"):
-        try:
-            header, encoded = payload.split(",", 1)
-        except ValueError as exc:
-            raise ValueError("Malformed data URL for attachment") from exc
-        mime = header.split(";")[0].replace("data:", "", 1)
-        return base64.b64decode(encoded), mime or None
-    return base64.b64decode(payload), None
-
-
-def _is_text_attachment(content_type: Optional[str], filename: str) -> bool:
-    if content_type and content_type.lower() in TEXT_ATTACHMENT_TYPES:
-        return True
-    extension = Path(filename).suffix.lower()
-    return extension in TEXT_ATTACHMENT_EXTENSIONS
-
-
-def _is_image_attachment(content_type: Optional[str], filename: str) -> bool:
-    if content_type and content_type.lower().startswith("image/"):
-        return True
-    extension = Path(filename).suffix.lower()
-    return extension in IMAGE_ATTACHMENT_EXTENSIONS
-
-
-def _format_attachment_block(filename: str, text: str) -> str:
-    return f"""<Attachment>
-|Source|: {filename}
-|Content|: {text.strip()}"""
-
-
-def _encode_image_data_url(content_type: Optional[str], data: bytes, filename: str) -> str:
-    guessed_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    b64 = base64.b64encode(data).decode("utf-8")
-    return f"data:{guessed_type};base64,{b64}"
-
-
-def _build_attachment_context(attachments: Optional[List[dict]]) -> tuple[str, int, List[dict]]:
-    """Create textual context and collect image payloads for attachments."""
-    if not attachments:
-        return "", 0, []
-
-    text_sections: list[str] = []
-    image_inputs: list[dict] = []
-
-    for attachment in attachments:
-        filename = attachment.get("filename") or "attachment"
-        content_type = attachment.get("content_type")
-        payload = attachment.get("data")
-        if not payload:
-            logger.warning("[attachments] Skipping %s: empty payload", filename)
-            continue
-
-        try:
-            file_bytes, inferred_type = _decode_attachment_payload(payload)
-        except Exception as exc:
-            logger.warning("[attachments] Failed to decode %s: %s", filename, exc)
-            continue
-
-        resolved_type = (content_type or inferred_type or mimetypes.guess_type(filename)[0] or "").lower()
-
-        if _is_text_attachment(resolved_type, filename):
-            try:
-                text_payload = extract_attachment_text(file_bytes, filename, resolved_type)
-            except AttachmentProcessingError as exc:
-                logger.warning("[attachments] Skipping text attachment %s: %s", filename, exc)
-                continue
-
-            normalized_text = text_payload.strip()
-            if not normalized_text:
-                logger.info("[attachments] No text extracted from %s", filename)
-                continue
-
-            text_sections.append(_format_attachment_block(filename, normalized_text))
-        elif _is_image_attachment(resolved_type, filename):
-            data_url = _encode_image_data_url(resolved_type, file_bytes, filename)
-            image_inputs.append({
-                "filename": filename,
-                "data_url": data_url,
-            })
-        else:
-            logger.warning("[attachments] Unsupported attachment type for %s (%s)", filename, resolved_type or "unknown")
-
-    text_context = "\n----------\n".join(text_sections)
-    return text_context, len(text_sections), image_inputs
-
-
-def _guess_attachment_filename(content_type: Optional[str], index: int) -> str:
-    """Derive a fallback filename when the client does not provide one."""
-    extension = mimetypes.guess_extension(content_type or "") or ""
-    return f"attachment_{index + 1}{extension}"
-
-
-def _string_attachment_to_dict(raw_attachment: str, index: int) -> dict:
-    """Convert a simple string payload into the structured attachment shape."""
-    payload = raw_attachment.strip()
-    if not payload:
-        raise ValueError("Attachment string is empty")
-
-    content_type: Optional[str] = None
-    data = payload
-
-    if payload.startswith("data:"):
-        header = payload.split(";", 1)[0]
-        content_type = header.replace("data:", "", 1) or None
-    elif ":" in payload:
-        possible_type, remainder = payload.split(":", 1)
-        if "/" in possible_type:
-            content_type = possible_type
-            data = remainder
-
-    return {
-        "filename": _guess_attachment_filename(content_type, index),
-        "content_type": content_type,
-        "data": data,
-    }
-
-
-def _normalize_request_attachments(raw_attachments: Optional[List[str]]) -> List[dict]:
-    """Ensure every attachment passed downstream is a dict with expected keys."""
-    if not raw_attachments:
-        return []
-
-    normalized: List[dict] = []
-
-    for idx, attachment in enumerate(raw_attachments):
-        if not isinstance(attachment, str):
-            logger.warning(
-                "[attachments] Expected string payload but received %s at index %s",
-                type(attachment),
-                idx,
-            )
-            continue
-
-        try:
-            payload = _string_attachment_to_dict(attachment, idx)
-            normalized.append(payload)
-        except Exception as exc:
-            logger.warning(
-                "[attachments] Failed to normalize attachment at index %s: %s",
-                idx,
-                exc,
-            )
-
-    return normalized
 
 
 async def send_write_webhook(webhook_payload: dict):
@@ -248,7 +82,6 @@ async def process_write_request(write_data: dict):
         message = write_data["message"]
         template = write_data["template"]
         requirements = write_data.get("requirements", "")
-        attachments = write_data.get("attachments")
         
         # LLM parameters
         llm_params = {
@@ -258,22 +91,13 @@ async def process_write_request(write_data: dict):
             "max_tokens": write_data["max_tokens"]
         }
         
-        # Process attachments
-        attachment_context, attachment_count, image_inputs = _build_attachment_context(attachments)
-        logger.info(f"[process_write_request] Processed {attachment_count} text attachments and {len(image_inputs)} images")
-        
-        # If there are text attachments, append them to the message
-        if attachment_context:
-            message = f"{message}\n\n<<<User Attachments>>>\n{attachment_context}"
-        
         # Generate document using Writer
         response = await writer.write_document(
             message=message,
             template=template,
             requirements=requirements,
             conversation_id=conversation_id,
-            llm_params=llm_params,
-            image_inputs=image_inputs
+            llm_params=llm_params
         )
         logger.info("[process_write_request] Document generated")
         
@@ -318,7 +142,7 @@ async def write_document(
     4. Sends webhook notification when processing completes
     
     Args:
-        request: WriteRequest containing message, template, and configuration
+        request: WriteRequest containing message, template, requirements and configuration
     
     Returns:
         WriteResponse with status "pending" and empty content
@@ -331,7 +155,6 @@ async def write_document(
     message = request.message
     template = request.promptTemplate
     requirements = request.requirements or ""
-    attachments = request.attachments or []
     
     # LLM parameters from config
     temperature = get_config_value(config_set=CHATBOT_CONFIG, key="temperature")
@@ -354,13 +177,6 @@ async def write_document(
             metadata={}
         )
     
-    # Normalize attachments
-    attachment_payload = _normalize_request_attachments(attachments)
-    logger.info(
-        "[write] Normalized %s attachment(s) for writing",
-        len(attachment_payload),
-    )
-    
     # Prepare write data for background processing
     write_data = {
         "message_id": message_id,
@@ -371,8 +187,7 @@ async def write_document(
         "provider": provider,
         "model": model,
         "temperature": temperature,
-        "max_tokens": max_tokens,
-        "attachments": attachment_payload
+        "max_tokens": max_tokens
     }
     
     # Add write processing to background tasks
