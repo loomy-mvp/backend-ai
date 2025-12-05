@@ -45,6 +45,7 @@ class WriteRequest(BaseModel):
     conversationId: str
     promptTemplate: str
     message: str
+    requirements: Optional[str] = None  # JSON formatted string with template field values
     attachments: List[str] = None
     test: bool = False
 
@@ -246,6 +247,7 @@ async def process_write_request(write_data: dict):
         conversation_id = write_data["conversation_id"]
         message = write_data["message"]
         template = write_data["template"]
+        requirements = write_data.get("requirements", "")
         attachments = write_data.get("attachments")
         
         # LLM parameters
@@ -268,6 +270,7 @@ async def process_write_request(write_data: dict):
         response = await writer.write_document(
             message=message,
             template=template,
+            requirements=requirements,
             conversation_id=conversation_id,
             llm_params=llm_params,
             image_inputs=image_inputs
@@ -327,6 +330,7 @@ async def write_document(
     conversation_id = request.conversationId
     message = request.message
     template = request.promptTemplate
+    requirements = request.requirements or ""
     attachments = request.attachments or []
     
     # LLM parameters from config
@@ -363,6 +367,7 @@ async def write_document(
         "conversation_id": conversation_id,
         "message": message,
         "template": template,
+        "requirements": requirements,
         "provider": provider,
         "model": model,
         "temperature": temperature,

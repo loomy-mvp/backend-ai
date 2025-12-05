@@ -18,6 +18,7 @@ class Writer:
         self,
         message: str,
         template: str,
+        requirements: str,
         conversation_id: str,
         llm_params: dict,
         image_inputs: List[dict] = None
@@ -28,6 +29,7 @@ class Writer:
         Args:
             message: User's instructions or data for the document
             template: Template structure to follow
+            requirements: JSON formatted string with template field values
             conversation_id: Conversation ID for chat history
             llm_params: Dictionary containing provider, model, temperature, max_tokens
             image_inputs: Optional list of image inputs
@@ -63,6 +65,7 @@ class Writer:
             # Generate document
             response = await chain.ainvoke({
                 "template": template,
+                "requirements": requirements,
                 "question_messages": question_messages,
                 "chat_history": chat_history
             })

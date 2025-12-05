@@ -85,7 +85,7 @@ Output:
 
 WRITE_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
     ("system", WRITE_SYSTEM_PROMPT),
-    ("user", "<<<Chat history>>>\n{chat_history}\n"),
     ("user", "<<<Template>>>\n{template}\n"),
+    ("user", "<<<Requirements>>>\n{requirements}\n"),
     MessagesPlaceholder(variable_name="question_messages")
 ])
