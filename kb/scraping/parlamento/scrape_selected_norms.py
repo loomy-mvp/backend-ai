@@ -7,20 +7,23 @@ from typing import List, Tuple, Optional
 import requests
 from bs4 import BeautifulSoup
 
+###### EDIT THIS ######
 TARGET_LAWS = [
-    {"slug": "d_lgs_2016_219", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2016-11-25;219!vig="},
-    {"slug": "l_2014_114", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2014-08-11;114!vig="},
-    {"slug": "d_lgs_2013_33", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2013-03-14;33!vig="},
-    {"slug": "l_2012_190", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2012-11-06;190!vig="},
-    {"slug": "d_lgs_2010_23", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2010-02-15;23!vig="},
-    {"slug": "d_lgs_2009_150", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2009-10-27;150!vig="},
-    {"slug": "dpr_2005_254", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.del.presidente.della.repubblica:2005-11-02;254!vig="},
-    {"slug": "d_lgs_2001_165", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2001-03-30;165!vig="},
-    {"slug": "l_1993_580", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:1993-12-29;580!vig="},
-    {"slug": "l_1990_241", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:1990-08-07;241!vig="},
-    {"slug": "d_lgs_2013_33_bis", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2013-03-14;33!vig="},
+    {"slug": "dpr_1986_917", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1986-12-22;917"},
+    {"slug": "dpr_1973_600", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1973;600"},
+    {"slug": "d_lgs_2025_33", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2025-03-24;33"},
+    {"slug": "dpr_1972_633", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1972-10-26;633"},
+    {"slug": "dpr_2000_445", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:2000-12-28;445"},
+    {"slug": "d_lgs_2019_14", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2019-01-12;14"},
+    {"slug": "d_lgs_2005_209", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2005-09-07;209"},
+    {"slug": "d_lgs_2005_206", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2005-09-06;206"},
+    {"slug": "d_lgs_2017_117", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2017-07-03;117"},
+    {"slug": "d_lgs_2023_36", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2023;036"},
+    {"slug": "d_lgs_2003_259", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2003-08-01;259"},
+    {"slug": "d_lgs_2005_82", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2005-03-07;82"},
 ]
 
+# ! Run it from inside the parlamento folder
 OUTPUT_DIR = os.path.join(os.getcwd(), "selected_leggi_output")
 REQUEST_TIMEOUT = 30
 MAX_RETRIES = 3

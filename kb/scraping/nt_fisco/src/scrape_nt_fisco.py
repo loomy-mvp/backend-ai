@@ -95,7 +95,7 @@ SECTIONS = {
 PAGELOAD_TIMEOUT = 60
 WAIT_TIMEOUT = 30
 RETRY_ATTEMPTS = 3
-DEFAULT_DELAY = 2.0  # Delay between actions
+DEFAULT_DELAY = 1.0  # Delay between actions
 
 
 # -------------------- UTILITY FUNCTIONS --------------------
@@ -232,11 +232,12 @@ def generate_article_id(title: str, url: str = "") -> str:
 # -------------------- ARTICLE EXTRACTION --------------------
 
 def extract_article_details_from_url(driver: webdriver.Chrome, url: str) -> Optional[Dict]:
-    """Visit an article URL and extract full title, subtitle/preview.
+    """Visit an article URL and extract full title, subtitle and preview.
     
     The article page contains:
     - h1: Full article title
-    - h2.asummary: Full subtitle/preview (longer than list preview)
+    - h2.asummary: Subtitle/kicker
+    - p.atext: Preview (beginning of the article)
     - .subsection: Section category
     
     Note: The full article body (.abody) is behind a paywall.
@@ -271,14 +272,18 @@ def extract_article_details_from_url(driver: webdriver.Chrome, url: str) -> Opti
             logger.warning(f"No title found for article: {url}")
             return None
         
-        # Extract preview text from p.atabs-txt (this contains the full preview/summary)
-        preview_elem = soup.select_one('p.atabs-txt')
+        # Extract subtitle from h2.asummary (this is the subtitle/kicker)
+        subtitle_elem = soup.select_one('h2.asummary, .asummary')
+        subtitle = subtitle_elem.get_text(strip=True) if subtitle_elem else None
+        
+        # Extract preview text from p.atext (this contains the beginning of the article)
+        preview_elem = soup.select_one('p.atext')
         preview = preview_elem.get_text(strip=True) if preview_elem else None
         
-        # Fallback: try h2.asummary if no preview found
+        # Fallback: try p.atabs-txt if no preview found
         if not preview:
-            subtitle_elem = soup.select_one('h2.asummary, .asummary')
-            preview = subtitle_elem.get_text(strip=True) if subtitle_elem else None
+            fallback_elem = soup.select_one('p.atabs-txt')
+            preview = fallback_elem.get_text(strip=True) if fallback_elem else None
         
         # Extract section/category
         section_elem = soup.select_one('.meta-part.subsection, .subsection')
@@ -301,9 +306,14 @@ def extract_article_details_from_url(driver: webdriver.Chrome, url: str) -> Opti
         if date_elem:
             date = date_elem.get('datetime') or date_elem.get_text(strip=True)
         
+        # Combine title and subtitle into a single title field
+        full_title = title
+        if subtitle:
+            full_title = f"{title}. {subtitle}"
+        
         return {
-            "title": title,
-            "preview": preview,  # The full preview/summary text from p.atabs-txt
+            "title": full_title,  # Title combined with subtitle from h2.asummary
+            "preview": preview,  # The beginning of the article from p.atext
             "section_name": section_name,
             "author": author,
             "date": date,
@@ -821,8 +831,7 @@ class NTFiscoScraper:
         try:
             # Generate filename from title
             title = article.get('title', 'untitled')
-            article_id = generate_article_id(title, article.get('url', ''))
-            filename = f"{sanitize_filename(title)}_{article_id}.json"
+            filename = f"{sanitize_filename(title)}.json"
             
             # Create JSON content
             json_content = json.dumps(article, ensure_ascii=False, indent=2)

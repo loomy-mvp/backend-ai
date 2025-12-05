@@ -179,7 +179,7 @@ def process_with_bedrock(
                 cache_read_tokens,
                 cache_write_tokens,
             )
-
+        logger.info("RESPONSE TEXT: %s", response_text)
         return response_text
 
     except Exception as e:

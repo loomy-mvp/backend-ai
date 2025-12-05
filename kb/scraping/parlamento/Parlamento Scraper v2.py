@@ -64,7 +64,7 @@ from bs4 import BeautifulSoup
 areas = {
     "Assistenza_previdenza_assicurazioni": 15,
     "Banche_credito_moneta": 10,
-    "Bilancio_dello_Stato_e_manovra_finanziaria": 33,  DA RIFARE
+    "Bilancio_dello_Stato_e_manovra_finanziaria": 33,
     "Borsa_e_attivita_finanziarie": 3,
     "Commercio_con_l_estero": 9,
     "Commercio_e_servizi": 11,
