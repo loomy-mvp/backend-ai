@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from .services.kb_api import kb_router
 from .services.chatbot_api import chatbot_router
+from .services.write_api import write_router
 from .utils.db_utils import DBUtils
 
 @asynccontextmanager
@@ -36,6 +37,7 @@ app = FastAPI(
 # Expose all service endpoints in the main app's OpenAPI/Swagger
 app.include_router(kb_router, prefix="/kb", tags=["kb"])
 app.include_router(chatbot_router, prefix="/chatbot", tags=["chatbot"])
+app.include_router(write_router, prefix="/write", tags=["write"])
 
 @app.get("/")
 def root():
@@ -45,6 +47,7 @@ def root():
 		"redoc": "/redoc",
 		"routes": [
 			"/kb/*",
-			"/chatbot/*"
+			"/chatbot/*",
+			"/write/*"
 		],
 	}
