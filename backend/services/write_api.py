@@ -36,8 +36,8 @@ chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
 class WriteRequest(BaseModel):
     messageId: str
     conversationId: str
-    promptTemplate: str
-    message: str
+    promptTemplate: Optional[str] = None
+    message: Optional[str] = None
     requirements: Optional[str] = None  # JSON formatted string with template field values
     test: bool = False
 
