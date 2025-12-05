@@ -103,7 +103,7 @@ def process_with_bedrock(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     top_p: float = DEFAULT_TOP_P,
     cache_point_type: str = "default",
-) -> str:
+) -> tuple[str, dict]:
     """
     Process content using AWS Bedrock Converse API with prompt caching.
 
@@ -121,7 +121,7 @@ def process_with_bedrock(
         cache_point_type: Type of cache point ("default" for standard caching)
 
     Returns:
-        The model's response text
+        Tuple containing the model's response text and the usage metadata returned by Bedrock.
     """
     # Build the message with the user prompt at the top (for caching)
     # followed by the file content
@@ -143,7 +143,7 @@ def process_with_bedrock(
                 },
                 # File content - this varies per file and won't be cached
                 {
-                    "text": f"\n\n---\n\nDocument content:\n\n{file_content}",
+                    "text": f"\n\n{file_content}",
                 },
             ],
         }
@@ -170,9 +170,19 @@ def process_with_bedrock(
                 response_text += block["text"]
 
         # Log cache usage information if available
-        usage = response.get("usage", {})
+        usage = (response.get("usage", {}) or {}).copy()
+        input_tokens = usage.get("inputTokens", 0)
+        output_tokens = usage.get("outputTokens", 0)
         cache_read_tokens = usage.get("cacheReadInputTokens", 0)
         cache_write_tokens = usage.get("cacheWriteInputTokens", 0)
+        non_cached_input_tokens = max(input_tokens - cache_read_tokens, 0)
+        usage["nonCachedInputTokens"] = non_cached_input_tokens
+
+        logger.info(
+            "Token usage (non-cached) - Input: %d, Output: %d",
+            non_cached_input_tokens,
+            output_tokens,
+        )
         if cache_read_tokens or cache_write_tokens:
             logger.info(
                 "Cache usage - Read: %d tokens, Write: %d tokens",
@@ -180,7 +190,7 @@ def process_with_bedrock(
                 cache_write_tokens,
             )
         logger.info("RESPONSE TEXT: %s", response_text)
-        return response_text
+        return response_text, usage
 
     except Exception as e:
         logger.error("Bedrock API call failed: %s", str(e))
@@ -288,6 +298,9 @@ def main() -> None:
     # Process each file
     success_count = 0
     error_count = 0
+    total_non_cached_input_tokens = 0
+    total_output_tokens = 0
+    token_reporting_count = 0
 
     for i, file_path in enumerate(txt_files, 1):
         logger.info("Processing file %d/%d: %s", i, len(txt_files), file_path)
@@ -298,12 +311,13 @@ def main() -> None:
             logger.info("Read %d characters from file", len(file_content))
 
             # Skip processing if file is empty, create empty output
+            usage = None
             if not file_content.strip():
                 logger.info("File is empty, creating empty output file")
                 output = ""
             else:
                 # Process with Bedrock
-                output = process_with_bedrock(
+                output, usage = process_with_bedrock(
                     bedrock_client,
                     args.model,
                     args.prompt,
@@ -318,6 +332,11 @@ def main() -> None:
             save_output_to_gcs(gcs_client, args.bucket, output_path, output)
             logger.info("Saved output to %s", output_path)
 
+            if usage:
+                total_non_cached_input_tokens += usage.get("nonCachedInputTokens", 0)
+                total_output_tokens += usage.get("outputTokens", 0)
+                token_reporting_count += 1
+
             success_count += 1
 
         except Exception as e:
@@ -330,6 +349,16 @@ def main() -> None:
         success_count,
         error_count,
     )
+
+    if token_reporting_count:
+        mean_input_tokens = total_non_cached_input_tokens / token_reporting_count
+        mean_output_tokens = total_output_tokens / token_reporting_count
+        logger.info(
+            "Average non-cached tokens per processed file - Input: %.2f, Output: %.2f (%d files)",
+            mean_input_tokens,
+            mean_output_tokens,
+            token_reporting_count,
+        )
 
     if error_count > 0:
         sys.exit(1)
