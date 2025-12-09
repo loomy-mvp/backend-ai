@@ -17,14 +17,14 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
     provider_mapping = {
         ModelProvider.OPENAI: ("langchain_openai", "ChatOpenAI", "max_tokens"),
         ModelProvider.ANTHROPIC: ("langchain_anthropic", "ChatAnthropic", "max_tokens"),
-        ModelProvider.GOOGLE: ("langchain_google_vertexai", "ChatVertexAI", "max_output_tokens"),
+        ModelProvider.GOOGLE: ("langchain_google_genai", "ChatGoogleGenerativeAI", "max_tokens"),
         # Add more providers as needed
     }
     # Provider-specific logging opt-out parameters to keep requests private by default
     privacy_overrides = {
         ModelProvider.OPENAI: {"default_headers": {"OpenAI-Data-Opt-Out": "true"}},
         ModelProvider.ANTHROPIC: {"metadata": {"anthropic-beta": "do-not-log"}},
-        ModelProvider.GOOGLE: {"safety_settings": {"logging": "NONE"}},
+        # ModelProvider.GOOGLE: not_available
     }
     
     if provider is None:

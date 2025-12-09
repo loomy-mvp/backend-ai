@@ -40,7 +40,7 @@ from backend.utils.ai_workflow_utils.attachment_processing import (
     extract_attachment_text,
     AttachmentProcessingError,
 )
-from langchain.schema import HumanMessage
+from langchain_core.messages import HumanMessage
 
 # Retrieval judge
 from backend.utils.ai_workflow_utils.retrieval_judge import RetrievalJudge

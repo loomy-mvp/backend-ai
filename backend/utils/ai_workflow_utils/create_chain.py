@@ -1,5 +1,5 @@
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
 
 def create_chain(llm, prompt_template):
     """Create the chain with LangChain."""

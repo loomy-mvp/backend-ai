@@ -1,5 +1,5 @@
 from typing import Final
-from langchain.prompts.chat import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 CHAT_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
         ("system", "{system_prompt}"),
