@@ -18,7 +18,6 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
         ModelProvider.OPENAI: ("langchain_openai", "ChatOpenAI", "max_tokens"),
         ModelProvider.ANTHROPIC: ("langchain_anthropic", "ChatAnthropic", "max_tokens"),
         ModelProvider.GOOGLE: ("langchain_google_genai", "ChatGoogleGenerativeAI", "max_tokens"),
-        # Add more providers as needed
     }
     # Provider-specific logging opt-out parameters to keep requests private by default
     privacy_overrides = {
