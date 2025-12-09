@@ -1,4 +1,4 @@
-from backend.config.chatbot_config import CHATBOT_CONFIG
+from backend.config.chatbot_config import CHATBOT_CONFIG, PROVIDER_THINKING_KWARGS
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from enum import Enum
 
@@ -54,11 +54,16 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
         kwargs = {
             "model": model,
             "temperature": temperature,
-            max_tokens_param: max_tokens
+            max_tokens_param: max_tokens,
+            
         }
         opt_out_kwargs = privacy_overrides.get(provider)
         if opt_out_kwargs:
             kwargs.update(opt_out_kwargs)
+
+        thinking_kwargs = PROVIDER_THINKING_KWARGS.get(provider.value)
+        if thinking_kwargs:
+            kwargs.update(thinking_kwargs)
         
         return llm_class(**kwargs)
         

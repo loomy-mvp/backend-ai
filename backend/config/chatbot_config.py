@@ -1,11 +1,22 @@
-# Configuration for chatbot API
-
 CHATBOT_CONFIG = {
-    # Explicit values (used if set, otherwise fallback to defaults below)
-    "model": 'gpt-5-2025-08-07',
-    "provider": 'openai', # e.g., "openai", "anthropic", "google"
-    "max_tokens": 20000,
+    "model": "gpt-5.1-2025-11-13", # 'claude-sonnet-4-5-20250929', # 'gemini-3-pro-preview', # 'gpt-5-2025-08-07',
+    "provider": 'openai', # "openai", "anthropic", "google"
+    "max_tokens": 2000,
     "top_k": 5  # Number of relevant documents to retrieve from each kb
+}
+
+# Provider-specific extra kwargs to enable thinking / reasoning features
+PROVIDER_THINKING_KWARGS = {
+    "anthropic": {
+        "thinking": {
+            "type": "enabled",
+            "budget_tokens": 2000,
+        }
+    },
+    "openai": {
+        "reasoning": {"effort": "none"},
+        "text": {"verbosity": "low"},
+    },
 }
 
 SIMILARITY_THRESHOLD = 0.4  # Minimum similarity score for retrieved documents
@@ -17,8 +28,8 @@ EMBEDDING_CONFIG = {
 }
 
 RETRIEVAL_JUDGE_CONFIG = {
-    "model": 'gpt-5-nano-2025-08-07',
-    "provider": 'openai',
+    "model": 'gemini-2.5-flash-lite', # gpt-5-nano-2025-08-07, claude-haiku-4-5, gemini-2.5-flash-lite
+    "provider": 'google',
     "max_tokens": 1000
 }
 RETRIEVAL_JUDGE_CONFIG["temperature"] = 0.0 if not "gpt-5" in RETRIEVAL_JUDGE_CONFIG['model'] else 1
