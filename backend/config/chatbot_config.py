@@ -19,7 +19,7 @@ PROVIDER_THINKING_KWARGS = {
     },
 }
 
-SIMILARITY_THRESHOLD = 0.25  # Minimum similarity score for retrieved documents
+SIMILARITY_THRESHOLD = 0  # Minimum similarity score for retrieved documents
 CHATBOT_CONFIG["temperature"] = 0.0 if not "gpt-5" in CHATBOT_CONFIG['model'] else 1
 
 EMBEDDING_CONFIG = {
