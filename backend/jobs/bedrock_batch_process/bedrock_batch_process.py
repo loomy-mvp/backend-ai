@@ -13,9 +13,11 @@ import json
 import logging
 import os
 import sys
+import time
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from google.cloud import storage as gcs
 from google.oauth2 import service_account
 from dotenv import load_dotenv
@@ -84,10 +86,26 @@ def read_file_from_gcs(gcs_client, bucket_name: str, blob_name: str) -> str:
     return blob.download_as_text(encoding="utf-8")
 
 
-def save_output_to_gcs(gcs_client, bucket_name: str, blob_name: str, content: str) -> None:
-    """Save content to GCS as a txt file."""
+def blob_exists(gcs_client, bucket_name: str, blob_name: str) -> bool:
+    """Return True if the blob exists in GCS."""
     bucket = gcs_client.bucket(bucket_name)
     blob = bucket.blob(blob_name)
+    return blob.exists()
+
+
+def save_output_to_gcs(
+    gcs_client,
+    bucket_name: str,
+    blob_name: str,
+    content: str,
+    overwrite: bool = False,
+) -> None:
+    """Save content to GCS as a txt file, respecting overwrite flag."""
+    bucket = gcs_client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    if not overwrite and blob.exists():
+        logger.info("Output %s already exists and overwrite disabled; skipping write", blob_name)
+        return
     blob.upload_from_string(
         content.encode("utf-8"), 
         content_type="text/plain; charset=utf-8"
@@ -197,6 +215,41 @@ def process_with_bedrock(
         raise
 
 
+def process_with_bedrock_with_retry(
+    bedrock_client,
+    model_id: str,
+    user_prompt: str,
+    file_content: str,
+    temperature: float = DEFAULT_TEMPERATURE,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
+    top_p: float = DEFAULT_TOP_P,
+    retry_delay_seconds: int = 60,
+):
+    """Call Bedrock with a single retry on throttling."""
+
+    for attempt in range(2):
+        try:
+            return process_with_bedrock(
+                bedrock_client,
+                model_id,
+                user_prompt,
+                file_content,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                top_p=top_p,
+            )
+        except ClientError as exc:
+            error_code = (exc.response.get("Error") or {}).get("Code")
+            if error_code == "ThrottlingException" and attempt == 0:
+                logger.warning(
+                    "Bedrock throttled the request. Sleeping %d seconds before retrying",
+                    retry_delay_seconds,
+                )
+                time.sleep(retry_delay_seconds)
+                continue
+            raise
+
+
 def get_output_key(original_key: str, folder: str) -> str:
     """Generate the output file key in the output subfolder.
     
@@ -263,6 +316,11 @@ def main() -> None:
         default=DEFAULT_TOP_P,
         help=f"Top-p nucleus sampling (0.0-1.0, default: {DEFAULT_TOP_P})",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing outputs. Defaults to False (skip existing outputs).",
+    )
 
     args = parser.parse_args()
 
@@ -306,6 +364,14 @@ def main() -> None:
         logger.info("Processing file %d/%d: %s", i, len(txt_files), file_path)
 
         try:
+            output_path = get_output_key(file_path, args.folder)
+            if not args.overwrite and blob_exists(gcs_client, args.bucket, output_path):
+                logger.info(
+                    "Output %s already exists and overwrite disabled; skipping file",
+                    output_path,
+                )
+                continue
+
             # Read file content
             file_content = read_file_from_gcs(gcs_client, args.bucket, file_path)
             logger.info("Read %d characters from file", len(file_content))
@@ -317,7 +383,7 @@ def main() -> None:
                 output = ""
             else:
                 # Process with Bedrock
-                output, usage = process_with_bedrock(
+                output, usage = process_with_bedrock_with_retry(
                     bedrock_client,
                     args.model,
                     args.prompt,
@@ -328,8 +394,13 @@ def main() -> None:
                 )
 
             # Save output
-            output_path = get_output_key(file_path, args.folder)
-            save_output_to_gcs(gcs_client, args.bucket, output_path, output)
+            save_output_to_gcs(
+                gcs_client,
+                args.bucket,
+                output_path,
+                output,
+                overwrite=args.overwrite,
+            )
             logger.info("Saved output to %s", output_path)
 
             if usage:
