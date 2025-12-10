@@ -119,10 +119,14 @@ def delete_public_document(
         bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(normalized_path)
         if not blob.exists():
-            raise FileNotFoundError(f"Document {normalized_path} not found in {bucket_name}")
-
-        blob.delete()
-        logger.info(f"[delete_public_document] Deleted file from GCS: {normalized_path}")
+            logger.warning(
+                "[delete_public_document] Document %s not found in %s; skipping file deletion",
+                normalized_path,
+                bucket_name,
+            )
+        else:
+            blob.delete()
+            logger.info(f"[delete_public_document] Deleted file from GCS: {normalized_path}")
 
     normalized_source: str | None = None
     if source:
