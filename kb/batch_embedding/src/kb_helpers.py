@@ -32,6 +32,8 @@ from backend.utils.ai_workflow_utils.document_processing import get_document_pro
 logger = logging.getLogger(__name__)
 
 MAX_CHUNK_CHAR_LENGTH = 8000  # keeps Pinecone metadata comfortably below 40 KB
+PINECONE_MAX_REQUEST_BYTES = 2 * 1024 * 1024  # Pinecone hard limit per request
+PINECONE_SAFE_REQUEST_BYTES = int(PINECONE_MAX_REQUEST_BYTES * 0.9)  # Stay well under the cap
 
 # Initialize clients
 gcp_credentials_info = os.getenv("GCP_SERVICE_ACCOUNT_CREDENTIALS")
@@ -102,6 +104,28 @@ def _split_text_to_fit_limit(text: str, max_chars: int = MAX_CHUNK_CHAR_LENGTH) 
         chunks.append(remaining)
 
     return chunks
+
+
+def _vector_to_payload(vector: Vector | Dict[str, Any]) -> Dict[str, Any]:
+    """Convert pinecone.Vector or dict into a JSON-serializable payload."""
+    if isinstance(vector, dict):
+        payload = {
+            "id": vector.get("id"),
+            "values": list(vector.get("values", [])),
+            "metadata": vector.get("metadata"),
+        }
+    else:
+        payload = {
+            "id": vector.id,
+            "values": list(vector.values),
+            "metadata": vector.metadata,
+        }
+    return payload
+
+
+def _estimate_payload_size(payload: Dict[str, Any]) -> int:
+    """Approximate payload size in bytes by serializing it to JSON."""
+    return len(json.dumps(payload, ensure_ascii=False))
 
 
 def _append_chunk(chunks: List[dict], doc_metadata: dict, safe_doc_name: str, text: str) -> None:
@@ -203,6 +227,7 @@ class EmbedRequest(BaseModel):
 
 class UpsertRequest(BaseModel):
     index_name: str
+    namespace: str | None = None
     vectors: list
 
 
@@ -399,14 +424,69 @@ def _upsert_to_vector_store(upsert_request: UpsertRequest) -> Dict[str, Any]:
             )
         
         index = pc.Index(name=upsert_request.index_name)
-        
-        upsert_response = index.upsert(
-            vectors=upsert_request.vectors
-        )
-        
+        if not upsert_request.vectors:
+            return {"status": "success", "upserted": 0}
+
+        serialized_vectors = []
+        for vector in upsert_request.vectors:
+            payload = _vector_to_payload(vector)
+            payload_size = _estimate_payload_size(payload)
+            serialized_vectors.append((payload, payload_size))
+
+        batches: List[List[Dict[str, Any]]] = []
+        current_batch: List[Dict[str, Any]] = []
+        current_batch_bytes = 0
+
+        for payload, payload_size in serialized_vectors:
+            if payload_size > PINECONE_SAFE_REQUEST_BYTES:
+                logger.warning(
+                    "Vector %s (~%d bytes) exceeds safe payload size; sending as single-vector batch",
+                    payload.get("id"),
+                    payload_size,
+                )
+                if current_batch:
+                    batches.append(current_batch)
+                    current_batch = []
+                    current_batch_bytes = 0
+                batches.append([payload])
+                continue
+
+            if current_batch and current_batch_bytes + payload_size > PINECONE_SAFE_REQUEST_BYTES:
+                batches.append(current_batch)
+                current_batch = []
+                current_batch_bytes = 0
+
+            current_batch.append(payload)
+            current_batch_bytes += payload_size
+
+        if current_batch:
+            batches.append(current_batch)
+
+        total_upserted = 0
+        for idx, batch in enumerate(batches, start=1):
+            approx_bytes = sum(_estimate_payload_size(vector) for vector in batch)
+            logger.debug(
+                "Upserting batch %d/%d (%d vectors, ~%d bytes) into %s",
+                idx,
+                len(batches),
+                len(batch),
+                approx_bytes,
+                upsert_request.index_name,
+            )
+            upsert_response = index.upsert(
+                vectors=batch,
+                namespace=upsert_request.namespace,
+            )
+            if hasattr(upsert_response, "upserted_count"):
+                total_upserted += upsert_response.upserted_count
+            elif isinstance(upsert_response, dict) and "upserted_count" in upsert_response:
+                total_upserted += upsert_response["upserted_count"]
+            else:
+                total_upserted += len(batch)
+
         return {
             "status": "success",
-            "upserted": upsert_response.upserted_count if hasattr(upsert_response, 'upserted_count') else len(upsert_request.vectors)
+            "upserted": total_upserted,
         }
         
     except Exception as e:
