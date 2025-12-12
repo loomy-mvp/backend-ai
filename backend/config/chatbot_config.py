@@ -19,6 +19,23 @@ PROVIDER_THINKING_KWARGS = {
     },
 }
 
+WEB_SEARCH_KWARG = {
+    "openai": {
+        "tools": [
+            {
+                "type": "web_search",
+                # "filters": {
+                #     "allowed_domains": [
+                #         "your_source.com",
+                #     ]
+                # },
+            }
+        ],
+        "tool_choice": "auto",
+        "include": ["web_search_call.action.sources"],
+    },
+}
+
 SIMILARITY_THRESHOLD = 0.4  # Minimum similarity score for retrieved documents
 CHATBOT_CONFIG["temperature"] = 0.0 if not "gpt-5" in CHATBOT_CONFIG['model'] else 1
 
