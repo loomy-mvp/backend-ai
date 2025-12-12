@@ -359,8 +359,12 @@ async def process_chat_request(chat_data: dict):
         logger.info(f"[process_chat_request] Chat history length: {len(chat_history)}")
         
         # Decide whether to retrieve documents or go plain LLM
-        retrieve = retrieval_judge.judge_retrieval(chat_history, message)
-        logger.info(f"[process_chat_request] Retrieval decision: {retrieve}")
+        if not chat_history:
+            retrieve = True
+            logger.info("[process_chat_request] Empty chat history; forcing retrieval")
+        else:
+            retrieve = retrieval_judge.judge_retrieval(chat_history, message)
+            logger.info(f"[process_chat_request] Retrieval decision: {retrieve}")
         
         # If no retrieval, set system message to not use context
         if retrieve is False:
