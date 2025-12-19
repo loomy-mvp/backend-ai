@@ -1,6 +1,6 @@
 from fastapi import APIRouter, BackgroundTasks, Depends
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
 import httpx
 import os
@@ -38,7 +38,7 @@ class WriteRequest(BaseModel):
     conversationId: str
     promptTemplate: Optional[str] = None
     message: Optional[str] = None
-    requirements: Optional[str] = None  # JSON formatted string with template field values
+    requirements: Optional[Any] = None  # JSON formatted string with template field values
     test: bool = False
 
 
