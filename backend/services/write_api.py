@@ -160,7 +160,7 @@ async def write_document(
     temperature = get_config_value(config_set=CHATBOT_CONFIG, key="temperature")
     model = get_config_value(config_set=CHATBOT_CONFIG, key="model")
     provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
-    max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="max_tokens")
+    max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="write_max_tokens")
     
     # Handle test mode
     if request.test:

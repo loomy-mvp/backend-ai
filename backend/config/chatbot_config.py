@@ -2,8 +2,10 @@ CHATBOT_CONFIG = {
     "model": "gpt-5.1-2025-11-13", # 'claude-sonnet-4-5-20250929', # 'gemini-3-pro-preview', # 'gpt-5-2025-08-07', 'gpt-5.1-2025-11-13'
     "provider": 'openai', # "openai", "anthropic", "google"
     "max_tokens": 2000,
+    "write_max_tokens": 10000,
     "top_k": 5  # Number of relevant documents to retrieve from each kb
 }
+CHATBOT_CONFIG["temperature"] = 0.0 if not "gpt-5" in CHATBOT_CONFIG['model'] else 1
 
 # Provider-specific extra kwargs to enable thinking / reasoning features
 PROVIDER_THINKING_KWARGS = {
@@ -37,7 +39,6 @@ WEB_SEARCH_KWARG = {
 }
 
 SIMILARITY_THRESHOLD = 0.4  # Minimum similarity score for retrieved documents
-CHATBOT_CONFIG["temperature"] = 0.0 if not "gpt-5" in CHATBOT_CONFIG['model'] else 1
 
 EMBEDDING_CONFIG = {
     "model": 'embed-v4.0',  # e.g., "text-embedding-3-small"
