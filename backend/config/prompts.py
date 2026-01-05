@@ -35,7 +35,7 @@ Return {{"retrieve": true}} when:
 - The chat history is empty or irrelevant to the current query
 - The query requires specific documents
 
-The "return-false-conditions" are strict; if uncertain, respond with {"retrieve": true}.
+The "return-false-conditions" are strict; if uncertain, respond with {{"retrieve": true}}.
 Respond ONLY with a JSON object: {{"retrieve": true}} or {{"retrieve": false}}
 """
 ).strip()
