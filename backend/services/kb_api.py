@@ -474,7 +474,7 @@ def _upsert_to_vector_store(upsert_request: UpsertRequest):
             metric="cosine",
             spec=ServerlessSpec(
                 cloud="aws",
-                region="us-east-1" # TODO: To be changed to EU
+                region="eu-west-1"
             )
         )
     index = pc.Index(name=upsert_request.index_name)
