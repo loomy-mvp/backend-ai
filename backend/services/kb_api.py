@@ -51,6 +51,7 @@ pc = Pinecone(api_key=pinecone_api_key)
 document_webhook_url = os.getenv("DOCUMENT_WEBHOOK_URL")
 PUBLIC_BUCKET_NAME = "loomy-public-documents"
 PUBLIC_INDEX_NAME = "public"
+BUCKET_LOCATION = os.getenv("GCS_BUCKET_REGION", "europe-west8")
 
 class StorageRequest(BaseModel):
     user_id: str
@@ -288,10 +289,9 @@ def _store_file(storage_request: StorageRequest) -> dict:
     try:
         bucket_obj = storage_client.get_bucket(bucket_name)
     except Exception as exc:
-        if storage_request.library == "public":
-            logger.error("[_store_file] Public bucket %s unavailable: %s", bucket_name, exc)
-            raise
-        bucket_obj = storage_client.create_bucket(bucket_name)
+        bucket = storage.Bucket(storage_client, name=bucket_name)
+        bucket.location = BUCKET_LOCATION
+        bucket_obj = storage_client.create_bucket(bucket)
 
     # Determine folder prefix based on library type
     if storage_request.library == "organization":
@@ -323,6 +323,7 @@ def _store_file(storage_request: StorageRequest) -> dict:
         file_content = storage_request.file
     
     blob.upload_from_string(file_content, content_type=storage_request.content_type)
+    blob.make_public()
     return {"status": "uploaded", "storage_path": storage_path}
 
 def _embed_doc(embed_request: EmbedRequest):
