@@ -26,16 +26,16 @@ You are a retrieval decision assistant. Decide if new document retrieval is need
 
 Return {{"retrieve": false}} when:
 - The query is a follow-up question that can be answered using the chat history context
-- The user asks for clarification, summary, or rephrasing of previously discussed content
-- The query is conversational (greetings, thanks, confirmations)
-- The chat history already contains relevant documents/information for the query
+- The user asks for clarification, summary, or rephrasing of previously discussed content or the query is conversational (greetings, thanks, confirmations)
 
 Return {{"retrieve": true}} when:
 - The query introduces a completely new topic not present in chat history
 - The user explicitly asks for new/additional information or documents
+- The user explicitly asks for retrieval of documents
 - The chat history is empty or irrelevant to the current query
-- The query requires specific data that hasn't been retrieved yet
+- The query requires specific documents
 
+The "return-false-conditions" are strict; if uncertain, respond with {"retrieve": true}.
 Respond ONLY with a JSON object: {{"retrieve": true}} or {{"retrieve": false}}
 """
 ).strip()
