@@ -1,7 +1,7 @@
 CHATBOT_CONFIG = {
     "model": "gpt-5.1-2025-11-13", # 'claude-sonnet-4-5-20250929', # 'gemini-3-pro-preview', # 'gpt-5-2025-08-07', 'gpt-5.1-2025-11-13'
     "provider": 'openai', # "openai", "anthropic", "google"
-    "max_tokens": 2000,
+    "max_tokens": 5000,
     "write_max_tokens": 10000,
     "top_k": 5  # Number of relevant documents to retrieve from each kb
 }
