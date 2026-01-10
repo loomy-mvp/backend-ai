@@ -1,13 +1,13 @@
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
+from typing import List, Any, Optional
 import base64
 import httpx
 from datetime import datetime
 import mimetypes
 import os
 from pathlib import Path
-from uuid import uuid4
+import re
 # Load environment variables from .env file
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -418,6 +418,7 @@ async def process_chat_request(chat_data: dict):
             "question_messages": question_messages,
             "chat_history": chat_history
         })
+        response = re.sub(r"cite.*", " ", response)
         logger.info("[process_chat_request] Response generated")
         
         # Prepare sources for response
