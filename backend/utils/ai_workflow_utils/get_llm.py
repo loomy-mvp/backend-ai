@@ -9,7 +9,14 @@ class ModelProvider(str, Enum):
     GOOGLE = "google"
     
 # LLM initialization functions
-def get_llm(provider: ModelProvider = None, model: str = None, temperature: float = 0, max_tokens: int = None):
+def get_llm(
+    provider: ModelProvider = None,
+    model: str = None,
+    temperature: float = 0,
+    max_tokens: int = None,
+    provider_thinking_kwargs=None,
+    web_search_kwarg=None,
+):
     """Initialize LLM based on provider and model using config, with fallback to defaults."""
     import importlib
     
@@ -44,6 +51,11 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
     
     module_name, class_name, max_tokens_param = provider_mapping[provider]
     
+    if provider_thinking_kwargs is None:
+        provider_thinking_kwargs = PROVIDER_THINKING_KWARGS
+    if web_search_kwarg is None:
+        web_search_kwarg = WEB_SEARCH_KWARG
+
     try:
         # Dynamically import the module and get the class
         module = importlib.import_module(module_name)
@@ -60,11 +72,11 @@ def get_llm(provider: ModelProvider = None, model: str = None, temperature: floa
         if opt_out_kwargs:
             kwargs.update(opt_out_kwargs)
 
-        thinking_kwargs = PROVIDER_THINKING_KWARGS.get(provider.value)
+        thinking_kwargs = provider_thinking_kwargs.get(provider.value)
         if thinking_kwargs:
             kwargs.update(thinking_kwargs)
         
-        web_search_kwargs = WEB_SEARCH_KWARG.get(provider.value)
+        web_search_kwargs = web_search_kwarg.get(provider.value)
         if web_search_kwargs:
             kwargs.update(web_search_kwargs)
         

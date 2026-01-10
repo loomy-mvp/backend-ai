@@ -1,3 +1,4 @@
+######## Model configuration ########
 CHATBOT_CONFIG = {
     "model": "gpt-5.1-2025-11-13", # 'claude-sonnet-4-5-20250929', # 'gemini-3-pro-preview', # 'gpt-5-2025-08-07', 'gpt-5.1-2025-11-13'
     "provider": 'openai', # "openai", "anthropic", "google"
@@ -7,7 +8,7 @@ CHATBOT_CONFIG = {
 }
 CHATBOT_CONFIG["temperature"] = 0.0 if not "gpt-5" in CHATBOT_CONFIG['model'] else 1
 
-# Provider-specific extra kwargs to enable thinking / reasoning features
+######## Tools and reasoning configuration ########
 PROVIDER_THINKING_KWARGS = {
     "anthropic": {
         "thinking": {
@@ -38,6 +39,7 @@ WEB_SEARCH_KWARG = {
     },
 }
 
+######## RAG Configuration ########
 SIMILARITY_THRESHOLD = 0.4  # Minimum similarity score for retrieved documents
 
 EMBEDDING_CONFIG = {
@@ -51,3 +53,19 @@ RETRIEVAL_JUDGE_CONFIG = {
     "max_tokens": 1000
 }
 RETRIEVAL_JUDGE_CONFIG["temperature"] = 0.0 if not "gpt-5" in RETRIEVAL_JUDGE_CONFIG['model'] else 1
+
+######## Writer configuration ########
+WRITER_CONFIG = {
+    "model": 'gpt-5.1-2025-11-13',
+    "provider": 'openai',
+    "max_tokens": 20000
+}
+WRITER_CONFIG["temperature"] = 0.0 if not "gpt-5" in WRITER_CONFIG['model'] else 1
+
+# Writer-specific reasoning/verbosity settings
+WRITER_PROVIDER_THINKING_KWARGS = {
+    "openai": {
+        "reasoning": {"effort": "high"},
+        "text": {"verbosity": "high"},
+    },
+}

@@ -22,7 +22,7 @@ from backend.services.write import Writer
 writer = Writer()
 
 # Configuration
-from backend.config.chatbot_config import CHATBOT_CONFIG
+from backend.config.chatbot_config import WRITER_CONFIG
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.utils.auth import verify_token
 
@@ -157,10 +157,10 @@ async def write_document(
     requirements = request.requirements or ""
     
     # LLM parameters from config
-    temperature = get_config_value(config_set=CHATBOT_CONFIG, key="temperature")
-    model = get_config_value(config_set=CHATBOT_CONFIG, key="model")
-    provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
-    max_tokens = get_config_value(config_set=CHATBOT_CONFIG, key="write_max_tokens")
+    temperature = get_config_value(config_set=WRITER_CONFIG, key="temperature")
+    model = get_config_value(config_set=WRITER_CONFIG, key="model")
+    provider = get_config_value(config_set=WRITER_CONFIG, key="provider")
+    max_tokens = get_config_value(config_set=WRITER_CONFIG, key="max_tokens")
     
     # Handle test mode
     if request.test:

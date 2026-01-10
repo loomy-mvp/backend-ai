@@ -1,5 +1,6 @@
 import logging
 
+from backend.config.chatbot_config import WRITER_PROVIDER_THINKING_KWARGS
 from backend.config.prompts import WRITE_PROMPT_TEMPLATE
 from backend.utils.ai_workflow_utils.get_llm import get_llm
 from backend.utils.ai_workflow_utils.create_chain import create_chain
@@ -41,7 +42,8 @@ class Writer:
                 llm_params.get("provider"),
                 llm_params.get("model"),
                 llm_params.get("temperature"),
-                llm_params.get("max_tokens")
+                llm_params.get("max_tokens"),
+                provider_thinking_kwargs=WRITER_PROVIDER_THINKING_KWARGS,
             )
             logger.info("[write_document] LLM initialized")
             
