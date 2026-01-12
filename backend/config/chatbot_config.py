@@ -29,7 +29,7 @@ WEB_SEARCH_KWARG = {
                 "type": "web_search",
                 "filters": {
                     "allowed_domains": [
-                        "https://ntplusfisco.ilsole24ore.com/art/intangibili-ok-deduzione-solo-impairment-contabile-AIbVCum",
+                        "ntplusfisco.ilsole24ore.com",
                     ]
                 }
             }
