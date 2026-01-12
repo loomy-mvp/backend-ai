@@ -1,7 +1,11 @@
+import psycopg2
 from psycopg2 import pool
 from dotenv import load_dotenv
 import os
 import time
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Load environment variables from .env
 load_dotenv()
@@ -42,7 +46,12 @@ class DBUtils:
                     port=DB_PORT,
                     dbname=DB_NAME,
                     # Add connection timeout to fail faster
-                    connect_timeout=10
+                    connect_timeout=10,
+                    # Keepalive settings to prevent stale connections
+                    keepalives=1,
+                    keepalives_idle=30,      # Send keepalive after 30s idle
+                    keepalives_interval=10,  # Retry every 10s
+                    keepalives_count=5       # Give up after 5 failed keepalives
                 )
                 print(f"[DBUtils] Successfully connected to database on attempt {attempt}")
                 return
@@ -71,16 +80,37 @@ class DBUtils:
         cls._connection_pool.putconn(connection)
     
     @classmethod
-    def execute_query(cls, query, params=None) -> list:
-        """Execute query and return results"""
-        connection = cls.get_connection()
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute(query, params)
-                # connection.commit() only needed for INSERT/UPDATE/DELETE
-                return cursor.fetchall()
-        finally:
-            cls.return_connection(connection)
+    def execute_query(cls, query, params=None, max_retries=2) -> list:
+        """Execute query and return results with retry on connection failure"""
+        last_error = None
+        
+        for attempt in range(max_retries):
+            connection = cls.get_connection()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(query, params)
+                    # connection.commit() only needed for INSERT/UPDATE/DELETE
+                    return cursor.fetchall()
+            except (psycopg2.DatabaseError, psycopg2.OperationalError) as e:
+                last_error = e
+                logger.warning(f"[DBUtils] Database error on attempt {attempt + 1}/{max_retries}: {e}")
+                # Connection is broken - close it instead of returning to pool
+                try:
+                    cls._connection_pool.putconn(connection, close=True)
+                except Exception:
+                    pass  # Connection may already be closed
+                connection = None
+                
+                if attempt < max_retries - 1:
+                    logger.info("[DBUtils] Retrying with fresh connection...")
+                    continue
+                raise
+            finally:
+                # Only return connection if it wasn't closed due to error
+                if connection is not None:
+                    cls.return_connection(connection)
+        
+        raise last_error
     
     @classmethod
     def close_pool(cls):
