@@ -25,6 +25,7 @@ writer = Writer()
 from backend.config.chatbot_config import WRITER_CONFIG
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.utils.auth import verify_token
+from backend.utils.email_notification import send_error_email
 
 write_router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -113,6 +114,16 @@ async def process_write_request(write_data: dict):
         
     except Exception as e:
         logger.error(f"[process_write_request] Error processing write request for message_id {write_data.get('message_id')}: {str(e)}", exc_info=True)
+        
+        # Send email notification about the error
+        send_error_email(
+            subject=f"Write processing error - {write_data.get('message_id')}",
+            error_details=str(e),
+            context={
+                "message_id": write_data.get("message_id"),
+                "conversation_id": write_data.get("conversation_id"),
+            }
+        )
         
         # Send webhook notification with error
         await send_write_webhook({

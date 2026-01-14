@@ -40,6 +40,7 @@ from backend.utils.ai_workflow_utils.attachment_processing import (
     extract_attachment_text,
     AttachmentProcessingError,
 )
+from backend.utils.email_notification import send_error_email
 from langchain_core.messages import HumanMessage
 
 # Retrieval judge
@@ -449,6 +450,18 @@ async def process_chat_request(chat_data: dict):
         
     except Exception as e:
         logger.error(f"[process_chat_request] Error processing chat request for message_id {chat_data.get('message_id')}: {str(e)}", exc_info=True)
+        
+        # Send email notification about the error
+        send_error_email(
+            subject=f"Chat processing error - {chat_data.get('message_id')}",
+            error_details=str(e),
+            context={
+                "message_id": chat_data.get("message_id"),
+                "conversation_id": chat_data.get("conversation_id"),
+                "user_id": chat_data.get("user_id"),
+                "organization_id": chat_data.get("organization_id"),
+            }
+        )
         
         # Send webhook notification with error
         await send_chatbot_webhook({

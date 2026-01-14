@@ -28,6 +28,7 @@ from backend.utils.auth import verify_token
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.config.chatbot_config import EMBEDDING_CONFIG
 from backend.utils.ai_workflow_utils.document_processing import get_document_processor
+from backend.utils.email_notification import send_error_email
 
 kb_router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -624,6 +625,20 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
         size_bytes = locals().get("file_size")
         if size_bytes is None:
             size_bytes = len(upload_data.get("file_content", b""))
+        
+        # Send email notification about the error
+        send_error_email(
+            subject=f"Document upload error - {upload_data.get('filename')}",
+            error_details=str(e),
+            context={
+                "filename": upload_data.get("filename"),
+                "document_id": upload_data.get("document_id"),
+                "library": upload_data.get("library"),
+                "organization_id": upload_data.get("organization_id"),
+                "user_id": upload_data.get("user_id"),
+            }
+        )
+        
         await send_document_webhook({
             "status": "error",
             "storage_path": storage_path,
