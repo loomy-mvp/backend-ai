@@ -27,11 +27,11 @@ WEB_SEARCH_KWARG = {
         "tools": [
             {
                 "type": "web_search",
-                "filters": {
-                    "allowed_domains": [
-                        "ntplusfisco.ilsole24ore.com",
-                    ]
-                }
+                # "filters": {
+                #     "allowed_domains": [
+                #         "ntplusfisco.ilsole24ore.com",
+                #     ]
+                # }
             }
         ],
         "tool_choice": "auto",
