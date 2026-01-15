@@ -168,7 +168,11 @@ def _build_attachment_context(attachments: Optional[List[dict]]) -> tuple[str, i
 
             text_sections.append(_format_attachment_block(filename, normalized_text))
         elif _is_image_attachment(resolved_type, filename):
-            data_url = _encode_image_data_url(resolved_type, file_bytes, filename)
+            try:
+                data_url = _encode_image_data_url(resolved_type, file_bytes, filename)
+            except Exception as exc:
+                logger.warning("[attachments] Failed to encode image %s: %s", filename, exc)
+                continue
             image_inputs.append({
                 "filename": filename,
                 "data_url": data_url,
@@ -364,8 +368,12 @@ async def process_chat_request(chat_data: dict):
             retrieve = True
             logger.info("[process_chat_request] Empty chat history; forcing retrieval")
         else:
-            retrieve = retrieval_judge.judge_retrieval(chat_history, message)
-            logger.info(f"[process_chat_request] Retrieval decision: {retrieve}")
+            try:
+                retrieve = retrieval_judge.judge_retrieval(chat_history, message)
+                logger.info(f"[process_chat_request] Retrieval decision: {retrieve}")
+            except Exception as e:
+                logger.error(f"[process_chat_request] Error during retrieval judgment: {e}")
+                retrieve = True  # Default to retrieval on error
         
         # If no retrieval, set system message to not use context
         if retrieve is False:
@@ -375,16 +383,20 @@ async def process_chat_request(chat_data: dict):
         else:
             # Retrieve relevant documents
             system_message = RAG_SYSTEM_PROMPT
-            docs = retrieve_relevant_docs(
-                query=message,
-                index_name=index_name,
-                namespace=namespace,
-                libraries=libraries,
-                top_k=top_k,
-                similarity_threshold=similarity_threshold,
-                sources=source_filter  # Optional metadata filter
-            )
-            logger.info(f"[process_chat_request] Retrieved {len(docs)} relevant docs")
+            try:
+                docs = retrieve_relevant_docs(
+                    query=message,
+                    index_name=index_name,
+                    namespace=namespace,
+                    libraries=libraries,
+                    top_k=top_k,
+                    similarity_threshold=similarity_threshold,
+                    sources=source_filter  # Optional metadata filter
+                )
+                logger.info(f"[process_chat_request] Retrieved {len(docs)} relevant docs")
+            except Exception as e:
+                logger.error(f"[process_chat_request] Error during document retrieval: {e}")
+                docs = []
         
         # Format documents as context
         ### Format attachments
