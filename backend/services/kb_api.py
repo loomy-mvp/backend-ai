@@ -194,23 +194,23 @@ def chunk_document(doc_metadata: str, content: str, max_similarity: float = 0.70
         chunks = []
         current_chunk = paragraphs[0]
         current_chunk_texts = [current_chunk]
-    
-    # Helper function to estimate token count
-    def estimate_tokens(text: str) -> int:
-        """Estimate tokens as word_count / 1.33"""
-        word_count = len(text.split())
-        return int(word_count / 1.33)
-    
-    # Get embedding for the first paragraph
-    current_embedding = np.array(
-        co.embed(
-            texts=[current_chunk],
-            model=embedding_model_name,
-            input_type="search_document",
-            embedding_types=["float"],
-        ).embeddings.float_[0]
-    )
-    
+        
+        # Helper function to estimate token count
+        def estimate_tokens(text: str) -> int:
+            """Estimate tokens as word_count / 1.33"""
+            word_count = len(text.split())
+            return int(word_count / 1.33)
+        
+        # Get embedding for the first paragraph
+        current_embedding = np.array(
+            co.embed(
+                texts=[current_chunk],
+                model=embedding_model_name,
+                input_type="search_document",
+                embedding_types=["float"],
+            ).embeddings.float_[0]
+        )
+        
         for i in range(1, len(paragraphs)):
             para = paragraphs[i]
             para_embedding = np.array(
@@ -268,7 +268,7 @@ def chunk_document(doc_metadata: str, content: str, max_similarity: float = 0.70
                 current_chunk_texts = [para]
                 current_embedding = para_embedding
     
-    # Add last chunk
+        # Add last chunk
         chunks.append({
             "chunk_id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
             "page": doc_metadata["page"],
