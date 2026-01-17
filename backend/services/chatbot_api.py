@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
-from typing import List, Any, Optional
+from typing import List, Any, Optional, Literal
 import base64
 import httpx
 from datetime import datetime
@@ -30,7 +30,8 @@ KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
 from backend.config.chatbot_config import CHATBOT_CONFIG, SIMILARITY_THRESHOLD
-from backend.config.prompts import NO_RAG_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT, CHAT_PROMPT_TEMPLATE
+from backend.config.prompts import NO_RAG_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT, CHAT_PROMPT_TEMPLATE, TONE_DESCRIPTIONS
+
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.utils.ai_workflow_utils.get_llm import get_llm
 from backend.utils.auth import verify_token
@@ -65,6 +66,7 @@ class ChatRequest(BaseModel):
     message: str
     attachments: List[str] = None
     test: bool
+    tone_of_voice: Literal["formale", "amichevole", "divulgativo", "frizzante"] = None
 
 class ChatResponse(BaseModel):
     message_id: str
@@ -345,6 +347,7 @@ async def process_chat_request(chat_data: dict):
         namespace = chat_data["namespace"]
         similarity_threshold = chat_data.get("similarity_threshold")  # Will use default from config if not provided
         attachments = chat_data.get("attachments")
+        tone_of_voice = chat_data.get("tone_of_voice", None)
         
         # LLM parameters
         temperature = chat_data["temperature"]
@@ -375,14 +378,17 @@ async def process_chat_request(chat_data: dict):
                 logger.error(f"[process_chat_request] Error during retrieval judgment: {e}")
                 retrieve = True  # Default to retrieval on error
         
+        # Get tone description for the system prompt
+        tone_description = TONE_DESCRIPTIONS.get(tone_of_voice, "")
+        
         # If no retrieval, set system message to not use context
         if retrieve is False:
             docs = []
-            system_message = NO_RAG_SYSTEM_PROMPT
+            system_message = NO_RAG_SYSTEM_PROMPT.format(tone_of_voice=tone_description)
             logger.info("[process_chat_request] Retrieval disabled; using NO_RAG_SYSTEM_PROMPT")
         else:
             # Retrieve relevant documents
-            system_message = RAG_SYSTEM_PROMPT
+            system_message = RAG_SYSTEM_PROMPT.format(tone_of_voice=tone_description)
             try:
                 docs = retrieve_relevant_docs(
                     query=message,
@@ -590,7 +596,8 @@ async def chat(
         "model": model,
         "provider": provider,
         "max_tokens": max_tokens,
-        "attachments": attachment_payload
+        "attachments": attachment_payload,
+        "tone_of_voice": request.tone_of_voice
     }
     
     # Add chat processing to background tasks
