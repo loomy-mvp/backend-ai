@@ -179,13 +179,21 @@ def chunk_document(doc_metadata: str, content: str, max_similarity: float = 0.70
       (Similarity falls below max_similarity (default 0.70) OR token count exceeds max_tokens (default 1000))
     Token count is estimated as word_count / 1.33
     """
-    paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
-    if not paragraphs:
-        return []
-    
-    chunks = []
-    current_chunk = paragraphs[0]
-    current_chunk_texts = [current_chunk]
+    try:
+        paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
+        logger.info(
+            "[chunk_document] Start chunking: name=%s page=%s storage_path=%s paragraphs=%s",
+            doc_metadata.get("name"),
+            doc_metadata.get("page"),
+            doc_metadata.get("storage_path"),
+            len(paragraphs),
+        )
+        if not paragraphs:
+            return []
+        
+        chunks = []
+        current_chunk = paragraphs[0]
+        current_chunk_texts = [current_chunk]
     
     # Helper function to estimate token count
     def estimate_tokens(text: str) -> int:
@@ -203,63 +211,88 @@ def chunk_document(doc_metadata: str, content: str, max_similarity: float = 0.70
         ).embeddings.float_[0]
     )
     
-    for i in range(1, len(paragraphs)):
-        para = paragraphs[i]
-        para_embedding = np.array(
-            co.embed(
-                texts=[para],
-                model=embedding_model_name,
-                input_type="search_document",
-                embedding_types=["float"],
-            ).embeddings.float_[0]
-        )
-        
-        sim = cosine_similarity(current_embedding, para_embedding)
-        
-        # Check if merging would exceed token limit
-        potential_chunk = current_chunk + "\n\n" + para
-        potential_tokens = estimate_tokens(potential_chunk)
-        current_tokens = estimate_tokens(current_chunk)
-        
-        # Decision logic:
-        # 1. If below min_tokens, always merge (unless exceeding max_tokens)
-        # 2. If at or above min_tokens, split if similarity is low OR max_tokens would be exceeded
-        should_merge = False
-        if current_tokens < min_tokens:
-            # Below minimum, keep merging unless we'd exceed max
-            should_merge = potential_tokens <= max_tokens
-        else:
-            # At or above minimum, apply similarity and max token checks
-            should_merge = sim >= max_similarity and potential_tokens <= max_tokens
-        
-        if should_merge:
-            # Merge with current chunk
-            current_chunk = potential_chunk
-            current_chunk_texts.append(para)
-            # Update current embedding as the mean of embeddings (calculated by multiplying the mean by the n of current para in the chunk)
-            current_embedding = (current_embedding * len(current_chunk_texts) + para_embedding) / (len(current_chunk_texts) + 1)
-        else:
-            # Save current chunk (split due to low similarity or token limit exceeded)
-            chunks.append({
-                "chunk_id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
-                "page": doc_metadata["page"],
-                "text": current_chunk,
-                "storage_path": doc_metadata["storage_path"]
-            })
-            # Start new chunk
-            current_chunk = para
-            current_chunk_texts = [para]
-            current_embedding = para_embedding
+        for i in range(1, len(paragraphs)):
+            para = paragraphs[i]
+            para_embedding = np.array(
+                co.embed(
+                    texts=[para],
+                    model=embedding_model_name,
+                    input_type="search_document",
+                    embedding_types=["float"],
+                ).embeddings.float_[0]
+            )
+            
+            sim = cosine_similarity(current_embedding, para_embedding)
+            
+            # Check if merging would exceed token limit
+            potential_chunk = current_chunk + "\n\n" + para
+            potential_tokens = estimate_tokens(potential_chunk)
+            current_tokens = estimate_tokens(current_chunk)
+            
+            # Decision logic:
+            # 1. If below min_tokens, always merge (unless exceeding max_tokens)
+            # 2. If at or above min_tokens, split if similarity is low OR max_tokens would be exceeded
+            should_merge = False
+            if current_tokens < min_tokens:
+                # Below minimum, keep merging unless we'd exceed max
+                should_merge = potential_tokens <= max_tokens
+            else:
+                # At or above minimum, apply similarity and max token checks
+                should_merge = sim >= max_similarity and potential_tokens <= max_tokens
+            
+            logger.debug(
+                "[chunk_document] para=%s sim=%.4f current_tokens=%s potential_tokens=%s should_merge=%s",
+                i,
+                float(sim),
+                current_tokens,
+                potential_tokens,
+                should_merge,
+            )
+            
+            if should_merge:
+                # Merge with current chunk
+                current_chunk = potential_chunk
+                current_chunk_texts.append(para)
+                # Update current embedding as the mean of embeddings (calculated by multiplying the mean by the n of current para in the chunk)
+                current_embedding = (current_embedding * len(current_chunk_texts) + para_embedding) / (len(current_chunk_texts) + 1)
+            else:
+                # Save current chunk (split due to low similarity or token limit exceeded)
+                chunks.append({
+                    "chunk_id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
+                    "page": doc_metadata["page"],
+                    "text": current_chunk,
+                    "storage_path": doc_metadata["storage_path"]
+                })
+                # Start new chunk
+                current_chunk = para
+                current_chunk_texts = [para]
+                current_embedding = para_embedding
     
     # Add last chunk
-    chunks.append({
-        "chunk_id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
-        "page": doc_metadata["page"],
-        "text": current_chunk,
-        "storage_path": doc_metadata["storage_path"]
-    })
-    
-    return chunks
+        chunks.append({
+            "chunk_id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
+            "page": doc_metadata["page"],
+            "text": current_chunk,
+            "storage_path": doc_metadata["storage_path"]
+        })
+        
+        logger.info(
+            "[chunk_document] Completed: name=%s page=%s chunks=%s",
+            doc_metadata.get("name"),
+            doc_metadata.get("page"),
+            len(chunks),
+        )
+        return chunks
+    except Exception as exc:
+        logger.error(
+            "[chunk_document] Error: name=%s page=%s storage_path=%s error=%s",
+            doc_metadata.get("name") if isinstance(doc_metadata, dict) else None,
+            doc_metadata.get("page") if isinstance(doc_metadata, dict) else None,
+            doc_metadata.get("storage_path") if isinstance(doc_metadata, dict) else None,
+            str(exc),
+            exc_info=True,
+        )
+        raise
 
 async def send_document_webhook(document_webhook_payload: dict):
     """Send document processing status to the configured webhook."""
