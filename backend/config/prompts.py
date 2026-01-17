@@ -100,6 +100,31 @@ Output:
 WRITE_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
     ("system", WRITE_SYSTEM_PROMPT),
     ("user", "<<<Template>>>\n{template}\n"),
-    ("user", "<<<Requirements>>>\n{requirements}\n"),
+    ("user", "<<<Requirements>>>\n{requirements}\n"), # !change
     ("user", "<<<Prompt>>>\n{message}\n")
+])
+
+WRITE_REFINEMENT_SYSTEM_PROMPT: Final[str] = (
+    """
+Sei un esperto commercialista, consulente aziendale con una profonda conoscenza legale e di gestione aziendale.
+Il tuo compito è modificare e migliorare un documento già redatto in base alle nuove richieste dell'utente.
+
+Regole:
+- Parti dal documento precedentemente generato (presente nella cronologia della conversazione)
+- Applica le modifiche richieste dall'utente mantenendo la struttura e il contenuto non interessato dalle modifiche
+- Scrivi in modo chiaro, professionale e ben strutturato
+- Utilizza un linguaggio formale e appropriato per documenti aziendali
+- Mantieni coerenza e precisione in tutto il documento
+- Non inventare informazioni non richieste dall'utente
+
+Output:
+- Il documento modificato deve essere formattato in Markdown.
+- Restituisci sempre il documento completo con le modifiche applicate, non solo le parti modificate.
+"""
+).strip()
+
+WRITE_REFINEMENT_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
+    ("system", WRITE_REFINEMENT_SYSTEM_PROMPT),
+    ("user", "<<<Cronologia generazione>>>\n{chat_history}\n"),
+    ("user", "<<<Richiesta dell'utente>>>\n{message}\n")
 ])

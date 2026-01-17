@@ -1,7 +1,7 @@
 import logging
 
 from backend.config.chatbot_config import WRITER_PROVIDER_THINKING_KWARGS
-from backend.config.prompts import WRITE_PROMPT_TEMPLATE
+from backend.config.prompts import WRITE_PROMPT_TEMPLATE, WRITE_REFINEMENT_PROMPT_TEMPLATE
 from backend.utils.ai_workflow_utils.get_llm import get_llm
 from backend.utils.ai_workflow_utils.create_chain import create_chain
 from backend.utils.ai_workflow_utils.get_chat_history import get_chat_history
@@ -51,11 +51,10 @@ class Writer:
             chat_history = get_chat_history(conversation_id)
             logger.info(f"[write_document] Chat history length: {len(chat_history)}")
             
-            # Create chain using write prompt template
-            chain = create_chain(llm=llm, prompt_template=WRITE_PROMPT_TEMPLATE)
-            logger.info("[write_document] Write chain created")
-            
-            logger.info("[write_document] LLM payload prepared")
+            # Choose prompt template based on chat history
+            prompt_template = WRITE_REFINEMENT_PROMPT_TEMPLATE if chat_history else WRITE_PROMPT_TEMPLATE
+            chain = create_chain(llm=llm, prompt_template=prompt_template)
+            logger.info(f"[write_document] Using {'refinement' if chat_history else 'initial'} prompt")
             
             # Generate document
             response = await chain.ainvoke({
