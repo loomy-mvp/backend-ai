@@ -3,8 +3,8 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 # Tone of voice descriptions for system prompts
 TONE_DESCRIPTIONS: Dict[str, str] = {
-    "formale": "Usa un tono formale e professionale, con un linguaggio preciso e tecnico appropriato al contesto di uno studio di commercialisti.",
-    "amichevole": "Usa un tono professionale ma cordiale e accessibile, mantenendo competenza tecnica con un approccio più personale e disponibile, come se fossi un commercialista che stesse facendo consulenza a un suo amico e cliente.",
+    "formale": "Usa un tono formale e professionale, con un linguaggio preciso e tecnico appropriato al contesto di uno studio di commercialisti. Se fai riferimenti al lettore usa il \"Lei\" formale.",
+    "amichevole": "Usa un tono professionale ma cordiale e accessibile, mantenendo competenza tecnica con un approccio più personale e disponibile, come se fossi un commercialista che stesse facendo consulenza a un suo amico e cliente. Se fai riferimenti al lettore usa il \"Tu\".",
     "divulgativo": "Usa un tono divulgativo e coinvolgente tipico delle newsletter professionali, con uno stile chiaro e diretto che mantiene l'interesse del lettore.",
     "frizzante": "Usa un tono vivace e dinamico, pur mantenendo la professionalità. Sii energico e coinvolgente nelle risposte."
 }
