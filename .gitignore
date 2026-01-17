@@ -14,3 +14,4 @@ cmd_job_deployment.txt
 kb/scraping/nt_fisco/output
 *.xlsx
 kb/scraping/parlamento/selected_leggi_output/
+*.pdf
