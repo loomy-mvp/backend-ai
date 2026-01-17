@@ -1,12 +1,57 @@
 from backend.config.chatbot_config import CHATBOT_CONFIG, PROVIDER_THINKING_KWARGS, WEB_SEARCH_KWARG
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from enum import Enum
+import logging
 
 # Enums for model providers
 class ModelProvider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
+
+
+logger = logging.getLogger(__name__)
+
+
+def check_provider_status(provider: ModelProvider) -> None:
+    """Preflight check to ensure the provider API is reachable and credentials work."""
+    import os
+    import httpx
+
+    if provider == ModelProvider.OPENAI:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            logger.warning("OPENAI_API_KEY is not set; skipping status check")
+            return
+        url = "https://api.openai.com/v1/models"
+        headers = {"Authorization": f"Bearer {api_key}"}
+    elif provider == ModelProvider.ANTHROPIC:
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            logger.warning("ANTHROPIC_API_KEY is not set; skipping status check")
+            return
+        url = "https://api.anthropic.com/v1/models?limit=1"
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+        }
+    elif provider == ModelProvider.GOOGLE:
+        api_key = os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            logger.warning("GEMINI_API_KEY is not set; skipping status check")
+            return
+        url = f"https://generativelanguage.googleapis.com/v1/models?key={api_key}"
+        headers = {}
+    else:
+        logger.warning("Unsupported provider for status check: %s", provider)
+        return
+
+    try:
+        response = httpx.get(url, headers=headers, timeout=5.0)
+        response.raise_for_status()
+    except Exception as exc:
+        # Log and continue
+        logger.error(f"{provider.value} API status check failed: {exc}", exc_info=True)
     
 # LLM initialization functions
 def get_llm(
@@ -48,6 +93,8 @@ def get_llm(
 
     if provider not in provider_mapping:
         raise ValueError(f"Unsupported provider: {provider}")
+
+    check_provider_status(provider=provider)
     
     module_name, class_name, max_tokens_param = provider_mapping[provider]
     
