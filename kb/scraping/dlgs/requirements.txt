@@ -1,0 +1,10 @@
+selenium==4.25.0
+webdriver-manager==4.0.2
+beautifulsoup4==4.12.2
+lxml==4.9.3
+requests==2.31.0
+boto3==1.35.0
+botocore==1.35.0
+google-cloud-storage==2.14.0
+google-auth==2.25.2
+python-dotenv==1.0.0
