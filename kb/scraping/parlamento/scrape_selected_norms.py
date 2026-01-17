@@ -9,18 +9,7 @@ from bs4 import BeautifulSoup
 
 ###### EDIT THIS ######
 TARGET_LAWS = [
-    {"slug": "dpr_1986_917", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1986-12-22;917"},
-    {"slug": "dpr_1973_600", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1973;600"},
-    {"slug": "d_lgs_2025_33", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2025-03-24;33"},
-    {"slug": "dpr_1972_633", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1972-10-26;633"},
-    {"slug": "dpr_2000_445", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:2000-12-28;445"},
-    {"slug": "d_lgs_2019_14", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2019-01-12;14"},
-    {"slug": "d_lgs_2005_209", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2005-09-07;209"},
-    {"slug": "d_lgs_2005_206", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2005-09-06;206"},
-    {"slug": "d_lgs_2017_117", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2017-07-03;117"},
-    {"slug": "d_lgs_2023_36", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2023;036"},
-    {"slug": "d_lgs_2003_259", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2003-08-01;259"},
-    {"slug": "d_lgs_2005_82", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.legislativo:2005-03-07;82"},
+    {"slug": "Codice civile", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:codice.civile:1942-03-16;262!vig="},
 ]
 
 # ! Run it from inside the parlamento folder
