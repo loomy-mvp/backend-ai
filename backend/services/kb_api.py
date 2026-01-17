@@ -555,6 +555,19 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
         
         embed_status = embed_result.get("status", "unknown")
         if embed_status != "success":
+            send_error_email(
+                subject=f"Document embed error - {upload_data.get('filename')}",
+                error_details=embed_result.get("message", f"Embed status: {embed_status}"),
+                context={
+                    "filename": upload_data.get("filename"),
+                    "document_id": upload_data.get("document_id"),
+                    "library": upload_data.get("library"),
+                    "organization_id": upload_data.get("organization_id"),
+                    "user_id": upload_data.get("user_id"),
+                    "embed_status": embed_status,
+                    "chunks": embed_result.get("chunks", 0),
+                },
+            )
             await send_document_webhook({
                 "storage_path": storage_path,
                 "size_bytes": file_size,
