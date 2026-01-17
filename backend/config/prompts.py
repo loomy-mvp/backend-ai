@@ -100,7 +100,7 @@ Output:
 WRITE_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
     ("system", WRITE_SYSTEM_PROMPT),
     ("user", "<<<Template>>>\n{template}\n"),
-    ("user", "<<<Requirements>>>\n{requirements}\n"), # !change
+    ("user", "<<<Requisiti>>>\n{requirements}\n"),
     ("user", "<<<Prompt>>>\n{message}\n")
 ])
 
