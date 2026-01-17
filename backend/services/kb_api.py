@@ -168,9 +168,7 @@ def delete_public_document(
         logger.error("[delete_public_document] Error deleting from Pinecone: %s", exc, exc_info=True)
         raise
 
-def cosine_similarity(a, b):
-    a = np.array(a)
-    b = np.array(b)
+def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
 
 def chunk_document(doc_metadata: str, content: str, max_similarity: float = 0.70, max_tokens: int = 1000, min_tokens: int = 150) -> list:
@@ -196,17 +194,25 @@ def chunk_document(doc_metadata: str, content: str, max_similarity: float = 0.70
         return int(word_count / 1.33)
     
     # Get embedding for the first paragraph
-    current_embedding = co.embed(texts=[current_chunk],
-                                 model=embedding_model_name,
-                                 input_type="search_document",
-                                 embedding_types=["float"]).embeddings.float_[0]
+    current_embedding = np.array(
+        co.embed(
+            texts=[current_chunk],
+            model=embedding_model_name,
+            input_type="search_document",
+            embedding_types=["float"],
+        ).embeddings.float_[0]
+    )
     
     for i in range(1, len(paragraphs)):
         para = paragraphs[i]
-        para_embedding = co.embed(texts=[para],
-                                  model=embedding_model_name,
-                                  input_type="search_document",
-                                  embedding_types=["float"]).embeddings.float_[0]
+        para_embedding = np.array(
+            co.embed(
+                texts=[para],
+                model=embedding_model_name,
+                input_type="search_document",
+                embedding_types=["float"],
+            ).embeddings.float_[0]
+        )
         
         sim = cosine_similarity(current_embedding, para_embedding)
         
