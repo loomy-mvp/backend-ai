@@ -118,5 +118,99 @@
     "30": {
         "question": "Un contribuente persona fisica fiscalmente residente in Italia detiene una partecipazione del 1,5% nel capitale sociale di una S.p.A. italiana non quotata, acquisita nel 2018 per 100.000 euro. Nel novembre 2024 cede l'intera partecipazione per un corrispettivo di 180.000 euro a un terzo acquirente. Il contribuente chiede: (1) quale sia la qualificazione della partecipazione ceduta (qualificata o non qualificata) e i criteri di determinazione; (2) quale sia il trattamento fiscale della plusvalenza realizzata ai fini delle imposte dirette; (3) se esistano regimi opzionali di tassazione e quale sia il più conveniente; (4) quali siano gli adempimenti dichiarativi e i termini di versamento delle imposte; (5) se vi siano differenze nel caso in cui la partecipazione fosse in una società quotata o estera; (6) come si determina il costo fiscalmente riconosciuto e se vi siano eventuali incrementi o riduzioni; (7) quale sia il trattamento dell'eventuale minusvalenza se la cessione fosse avvenuta in perdita.",
         "answer": "Il trattamento fiscale delle plusvalenze derivanti da cessione di partecipazioni è disciplinato dagli artt. 67, comma 1, lett. c) e c-bis), e 68 del TUIR. L'analisi dettagliata è la seguente: (1) QUALIFICAZIONE DELLA PARTECIPAZIONE (qualificata vs non qualificata): Una partecipazione si definisce 'qualificata' se supera determinate soglie di diritti di voto o di partecipazione al capitale, previste dall'art. 67, comma 1, lett. c) del TUIR: - Per società NON QUOTATE (come nel caso specifico): superiore al 25% dei diritti di voto esercitabili nell'assemblea ordinaria, ovvero superiore al 25% del capitale o patrimonio sociale; - Per società QUOTATE in mercati regolamentati: superiore al 2% dei diritti di voto, ovvero superiore al 5% del capitale. Nel caso specifico, la partecipazione è dell'1,5% in una S.p.A. non quotata, quindi INFERIORE alla soglia del 25%. Pertanto, la partecipazione è QUALIFICATA COME NON QUALIFICATA. (2) TRATTAMENTO FISCALE DELLA PLUSVALENZA: La plusvalenza è pari a: 180.000 euro (corrispettivo) - 100.000 euro (costo di acquisizione) = 80.000 euro. Per le partecipazioni NON QUALIFICATE detenute al di fuori del regime d'impresa, ai sensi dell'art. 67, comma 1, lett. c-bis) del TUIR, la plusvalenza è soggetta a IMPOSTA SOSTITUTIVA del 26% ai sensi del D.Lgs. 461/1997. La tassazione è 'definitiva', ossia l'imposta sostitutiva sostituisce l'IRPEF e le addizionali, e la plusvalenza non concorre alla formazione del reddito complessivo ai fini IRPEF. Imposta dovuta: 80.000 x 26% = 20.800 euro. (3) REGIMI OPZIONALI DI TASSAZIONE: Per le partecipazioni non qualificate, il contribuente può scegliere tra tre regimi: (a) REGIME DELLA DICHIARAZIONE (regime ordinario, art. 5 del D.Lgs. 461/1997): il contribuente dichiara autonomamente la plusvalenza nel Modello Redditi PF (quadro RT, sezione II), calcola l'imposta sostitutiva del 26% e la versa con il Modello F24 utilizzando il codice tributo 1100 (imposta sostitutiva su plusvalenze da cessione partecipazioni non qualificate). Il versamento segue le scadenze ordinarie del saldo imposte (30 giugno dell'anno successivo, con possibilità di rateizzazione). PRO: gestione autonoma, possibilità di compensare minusvalenze pregresse dello stesso periodo e dei quattro anni precedenti (se risultanti da dichiarazioni). CONTRO: necessità di liquidità per il versamento dell'imposta. (b) REGIME DEL RISPARMIO AMMINISTRATO (art. 6 del D.Lgs. 461/1997): applicabile se la cessione avviene tramite un intermediario finanziario italiano (banca, SIM, società fiduciaria) presso cui le partecipazioni sono depositate in un rapporto di custodia/amministrazione. L'intermediario calcola automaticamente la plusvalenza, applica l'imposta sostitutiva del 26% e la versa all'Erario per conto del contribuente, trattenendola dal corrispettivo. Il contribuente non deve dichiarare l'operazione nel Modello Redditi (salvo opzione per la dichiarazione). PRO: automatismo, nessun adempimento dichiarativo, compensazione automatica con minusvalenze del medesimo rapporto. CONTRO: applicabile solo se intermediario italiano e rapporto di amministrazione attivo; imposta immediatamente trattenuta (no dilazione). (c) REGIME DEL RISPARMIO GESTITO (art. 7 del D.Lgs. 461/1997): applicabile se le partecipazioni sono conferite in una gestione patrimoniale presso un intermediario italiano. L'imposta sostitutiva del 26% è applicata sul risultato complessivo annuo della gestione (comprensivo di plusvalenze, minusvalenze, redditi di capitale), con versamento da parte del gestore. PRO: tassazione sul risultato netto della gestione, compensazione automatica di plusvalenze e minusvalenze. CONTRO: applicabile solo con gestione patrimoniale. REGIME PIU' CONVENIENTE: - Se la cessione avviene tramite intermediario italiano con deposito titoli: regime del risparmio amministrato (automatismo e semplicità). - Se la cessione è 'diretta' (es. cessione di quote con atto notarile, senza intermediario): necessariamente regime della dichiarazione. - Se esistono minusvalenze compensabili di anni precedenti: preferibile regime della dichiarazione per poter utilizzare le minusvalenze pregresse in compensazione. Nel caso specifico, se la cessione avviene con atto notarile diretto (tipico per S.p.A. non quotata), si applica necessariamente il regime della dichiarazione. (4) ADEMPIMENTI DICHIARATIVI E TERMINI DI VERSAMENTO: Regime della dichiarazione: - Compilazione del Modello Redditi PF 2025 (per cessione nel 2024), quadro RT, sezione II 'Plusvalenze di natura finanziaria': indicare il corrispettivo (180.000 euro), il costo di acquisto (100.000 euro), la plusvalenza (80.000 euro), l'imposta sostitutiva dovuta (20.800 euro). - Compilazione del quadro RM per indicare l'imposta sostitutiva. - Versamento dell'imposta sostitutiva con Modello F24, codice tributo 1100, entro il termine del saldo imposte: 30 giugno 2025 (oppure maggiorato dello 0,40% se versato entro il 30 luglio 2025). È ammessa la rateizzazione secondo le regole ordinarie. - In caso di compensazione con minusvalenze pregresse, queste devono essere indicate nel quadro RT e detratte dalla plusvalenza ai fini del calcolo dell'imposta. Regime amministrato: - Nessun adempimento dichiarativo (salvo opzione per indicare comunque l'operazione). - Imposta trattenuta e versata dall'intermediario entro il 16 del mese successivo alla cessione. (5) DIFFERENZE PER PARTECIPAZIONI QUOTATE O ESTERE: - Partecipazione in società QUOTATA italiana: le soglie per la qualificazione sono 2% dei voti o 5% del capitale. Nel caso di partecipazione 1,5%, resterebbe comunque non qualificata. Il regime fiscale è identico: imposta sostitutiva del 26%. Tuttavia, la cessione avviene generalmente tramite intermediario (banca/SIM), quindi si applica automaticamente il regime del risparmio amministrato o gestito. - Partecipazione in società ESTERA (UE o extra-UE): il trattamento fiscale italiano è analogo (imposta sostitutiva del 26% se non qualificata), ma: (a) occorre verificare la residenza fiscale della società partecipata e l'eventuale applicazione di convenzioni contro le doppie imposizioni; (b) se la società estera è situata in un Paese 'white list' (UE o con accordo di scambio informazioni), nessuna particolarità; (c) se la società estera è in un Paese a fiscalità privilegiata (black list), possono applicarsi regimi più severi (trasparenza fiscale, CFC rules); (d) per partecipazioni in società extra-UE, occorre compilare il quadro RW del Modello Redditi (monitoraggio fiscale IVAFE) se le partecipazioni sono detenute all'estero. (6) DETERMINAZIONE DEL COSTO FISCALMENTE RICONOSCIUTO: Il costo fiscalmente riconosciuto è pari al costo di acquisizione sostenuto (100.000 euro), eventualmente incrementato di: - Oneri accessori documentati e direttamente imputabili all'acquisto (es. spese notarili per l'atto di acquisto delle quote, imposte di registro pagate sull'acquisto): questi oneri aumentano il costo fiscale e riducono la plusvalenza. - Versamenti in conto capitale effettuati dal socio senza restituzione: incrementano il costo fiscale della partecipazione. - Riduzioni: (a) utili distribuiti dalla società durante il periodo di detenzione della partecipazione NON riducono il costo fiscale (in quanto già tassati come dividendi); (b) riduzioni di capitale con restituzione di riserve possono ridurre il costo fiscale se eccedenti il costo di acquisto. Nel caso specifico, ipotizzando che non vi siano stati oneri accessori documentabili né operazioni sul capitale, il costo fiscalmente riconosciuto è 100.000 euro. Se vi fossero state, ad esempio, spese notarili di acquisto per 2.000 euro documentate, il costo sarebbe 102.000 euro e la plusvalenza 78.000 euro. (7) TRATTAMENTO DELLE MINUSVALENZE: Se la cessione avvenisse in perdita (es. corrispettivo 80.000 euro, costo 100.000 euro, minusvalenza 20.000 euro): - Le minusvalenze da cessione di partecipazioni non qualificate sono DEDUCIBILI esclusivamente in compensazione con plusvalenze della stessa natura (partecipazioni non qualificate), realizzate nello stesso periodo d'imposta o nei quattro periodi successivi (art. 68, comma 5 del TUIR). - La minusvalenza NON è compensabile con altri redditi (es. reddito da lavoro, da immobili) né genera credito d'imposta o rimborso. - Per poter utilizzare la minusvalenza, questa deve essere indicata nel quadro RT del Modello Redditi dell'anno di realizzo e riportata negli anni successivi fino al quarto anno. - Nel regime del risparmio amministrato o gestito, la compensazione è automatica con le plusvalenze del medesimo rapporto/gestione. - Attenzione: se la cessione avviene con una controparte 'qualificata' (es. soggetto controllante/controllato), possono applicarsi limitazioni anti-elusive per evitare la creazione artificiosa di minusvalenze (art. 68, comma 6 del TUIR): le minusvalenze sono riconosciute solo se le partecipazioni sono state possedute per almeno tre anni. CALCOLO RIEPILOGATIVO: - Corrispettivo di cessione: 180.000 euro - Costo fiscalmente riconosciuto: 100.000 euro - Plusvalenza imponibile: 80.000 euro - Imposta sostitutiva 26%: 20.800 euro - Netto al contribuente: 180.000 - 20.800 = 159.200 euro (al netto dell'imposta sostitutiva) RACCOMANDAZIONI OPERATIVE: verificare se esistono minusvalenze di anni precedenti da compensare (consultare i Modelli Redditi 2020-2024); documentare accuratamente il costo di acquisto e gli eventuali oneri accessori (conservare atti notarili, ricevute di pagamento, documenti di spesa); se la cessione avviene tramite atto notarile, concordare preventivamente con l'acquirente le modalità di pagamento (assegni circolari, bonifici tracciati) per documentare il corrispettivo; valutare la tempistica della cessione in relazione alla disponibilità di liquidità per il versamento dell'imposta (scadenza giugno/luglio dell'anno successivo); se la cessione è infragruppo o a soggetti collegati, prestare attenzione alle norme anti-elusive (art. 68, comma 6 del TUIR); in caso di partecipazioni estere, verificare obblighi di monitoraggio fiscale (quadro RW) e IVAFE; consultare un professionista per situazioni complesse (es. partecipazioni in società con riserve di rivalutazione, partecipazioni in società estere in Paesi black list, cessioni a soggetti collegati)."
+    },
+    "31": {
+        "question": "Un credito INPS da modello unico può essere maggiore di 5000€ senza asseverazione della dichiarazione dei redditi?",
+        "answer": """Sì.
+
+Il visto di conformità è richiesto per l’utilizzo in compensazione orizzontale di crediti riconducibili a:
+- imposte sui redditi e relative addizionali  
+- ritenute alla fonte  
+- imposte sostitutive delle imposte sul reddito  
+- IRAP/IRPEF, ecc.  
+
+Lo stesso documento precisa però che **il visto non è richiesto per crediti di natura diversa, anche se generati in sede di dichiarazione dei redditi, come ad esempio un credito gestione INPS Commercianti, Artigiani o Gestione Separata**.  
+
+Quindi:
+- il credito INPS può tranquillamente essere superiore a 5.000 €;
+- la soglia dei 5.000 € con obbligo di visto di conformità riguarda i crediti tributi (IRPEF/IRAP ecc.) utilizzati in compensazione orizzontale, **non** i crediti contributivi INPS."""
+    },
+    "32": {
+        "question": "Come si calcola la sanzione per tardivo invio di fattura elettronica?",
+        "answer": "La sanzione per tardiva emissione/trasmissione della fattura elettronica tramite SdI è quella prevista dall’art. 6 del D.Lgs. 471/1997, richiamato dall’art. 1, comma 6, D.Lgs. 127/2015. In pratica, per ciascuna fattura:
+
+1. Operazioni imponibili IVA  
+   - Sanzione ordinaria: tra il 90% e il 180% dell’IVA relativa all’imponibile non correttamente documentato, con minimo 500 euro per ciascuna violazione.
+
+2. Se il ritardo NON incide sulla corretta liquidazione dell’imposta  
+   - Es.: fattura emessa tardi ma comunque entro i termini della liquidazione periodica in cui l’IVA viene correttamente versata.  
+   - Sanzione: da 250 a 2.000 euro per ciascuna operazione tardivamente documentata.
+
+3. Operazioni non imponibili, esenti, non soggette o soggette a reverse charge  
+   - Sanzione: tra il 5% e il 10% dei corrispettivi non documentati, con minimo 500 euro.  
+   - Se la violazione non rileva neppure ai fini reddituali, si applica la sanzione da 250 a 2.000 euro.
+
+4. Periodi “protetti” del 2019  
+   - Per il primo semestre 2019 (esteso fino al 30.09.2019 per i mensili) le sanzioni:  
+     a) non si applicavano se la fattura era emessa entro il termine di liquidazione IVA del periodo;  
+     b) erano ridotte dell’80% se emessa entro il termine della liquidazione del periodo successivo.  
+
+In pratica, quindi, per calcolare la sanzione devi:  
+1) individuare il tipo di operazione (imponibile / non imponibile, ecc.);  
+2) verificare se il ritardo ha inciso o meno sulla corretta liquidazione dell’IVA;  
+3) applicare la relativa fascia sanzionatoria (percentuale su IVA o corrispettivo, oppure range fisso 250–2.000 euro);  
+4) valutare l’eventuale ravvedimento operoso (art. 13 D.Lgs. 472/1997) per ridurre l’importo."
+    },
+    "33": {
+        "question": "requisiti per poter fruire della detrazione per risparmio energetico",
+        "answer": "In base alle istruzioni ai modelli dichiarativi (es. 730 e Redditi PF) i principali requisiti per fruire della detrazione per interventi di risparmio energetico (ecobonus) sono:
+
+1. Requisiti dell’immobile  
+- Deve trattarsi di edificio esistente (no fabbricati in costruzione).  
+- L’esistenza va provata con:
+  - iscrizione in catasto o richiesta di accatastamento, e  
+  - pagamento di ICI/IMU, se dovuta.
+
+2. Soggetti che possono beneficiare  
+- Chi possiede o detiene l’immobile con titolo idoneo:
+  - proprietà o altro diritto reale (usufrutto, uso, abitazione, ecc.);  
+  - concessione demaniale;  
+  - locazione o comodato.  
+- I condòmini, per spese su parti comuni condominiali.  
+- Il familiare convivente del possessore/detentore, se:
+  - sostiene le spese, e  
+  - fatture e bonifici sono a lui intestati. 
+
+3. Interventi agevolabili (macro categorie)  
+- Riqualificazione energetica globale di edifici esistenti.  
+- Interventi sull’involucro (coibentazioni, sostituzione finestre/infissi, ecc.).  
+- Installazione di pannelli solari.  
+- Sostituzione di impianti di climatizzazione invernale; in anni più recenti anche schermature solari e impianti a biomasse, con limiti e percentuali differenziati. 
+
+4. Spese ammesse  
+- Fornitura e posa in opera di materiali e impianti.  
+- Opere edilizie strettamente funzionali all’intervento energetico.  
+- Prestazioni professionali (progettazione, direzione lavori, certificazioni, asseverazioni, ecc.). 
+
+5. Modalità di pagamento  
+Per i contribuenti non titolari di reddito d’impresa:  
+- pagamento tramite bonifico bancario o postale “parlante”, da cui risultino:  
+  - causale del versamento;  
+  - codice fiscale del beneficiario della detrazione;  
+  - partita IVA o codice fiscale del soggetto che esegue i lavori. 
+
+6. Documentazione tecnica e fiscale  
+Da acquisire e conservare (e, ove previsto, trasmettere ENEA entro 90 giorni dalla fine lavori):  
+- fattura dell’impresa esecutrice;  
+- asseverazione di tecnico abilitato che attesti il rispetto dei requisiti tecnici;  
+  - in alcuni casi, sostituibile con certificazione del produttore o relazione tecnica ex D.M. 6.8.2009;  
+- attestato di prestazione/certificazione o qualificazione energetica (salve le esenzioni previste per specifici interventi e periodi);  
+- scheda informativa degli interventi, redatta sugli allegati E/F dei decreti attuativi (anche dall’utente finale per alcuni interventi). 
+
+7. Limiti e non cumulabilità  
+- I limiti massimi di detrazione si riferiscono alla singola unità immobiliare e si ripartiscono tra i soggetti che sostengono la spesa, in base a quanto pagato da ciascuno.  
+- La detrazione per risparmio energetico non è cumulabile, per le stesse spese, con altre agevolazioni fiscali sugli stessi interventi (es. detrazione per recupero patrimonio edilizio); è in genere richiedibile solo sulla parte di spesa eccedente eventuali contributi pubblici compatibili. 
+
+Se mi indica anno di spesa e tipologia di intervento (es. sostituzione caldaia, infissi, cappotto, ecc.), posso dettagliare aliquota, limiti di spesa e quadro/dettaglio da compilare nel modello 730/Redditi."
     }
 }
