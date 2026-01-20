@@ -222,7 +222,7 @@ class EmbedRequest(BaseModel):
     user_id: str | None = None
     storage_path: str | None = None
     content_type: str | None = None
-    overwrite: bool = False
+    overwrite: bool = True
 
 
 class UpsertRequest(BaseModel):
