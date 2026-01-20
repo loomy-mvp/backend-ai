@@ -66,7 +66,7 @@ class ChatRequest(BaseModel):
     message: str
     attachments: List[str] = None
     test: bool
-    tone_of_voice: Literal["formale", "amichevole", "divulgativo", "frizzante"] = None
+    tone_of_voice: Literal["formal", "friendly", "technical"] = None
 
 class ChatResponse(BaseModel):
     message_id: str
