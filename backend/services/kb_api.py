@@ -319,6 +319,22 @@ def _store_file(storage_request: StorageRequest) -> dict:
         file_content = storage_request.file.file.read()
     else:
         file_content = storage_request.file
+
+    if blob.exists():
+        if not storage_request.overwrite:
+            return {
+                "status": "error",
+                "reason": "file_exists",
+                "storage_path": storage_path,
+            }
+        else:
+            # Check size to avoid unnecessary overwrite
+            if blob.size == len(file_content):
+                return {
+                    "status": "error",
+                    "reason": "file_exists_same_size",
+                    "storage_path": storage_path,
+                }
     
     blob.upload_from_string(file_content, content_type=storage_request.content_type)
     blob.make_public()
@@ -510,7 +526,7 @@ async def process_doc_upload(upload_data: UploadRequest | dict):
         logger.info(f"[process_doc_upload] Storage result: {storage_result}")
 
         storage_path = storage_result.get("storage_path")
-        if storage_result.get("status") == "error": # TODO: implement SKIPPING, file existing
+        if storage_result.get("status") == "error":
             logger.warning("[process_doc_upload] Storage failed; aborting embedding and upsert")
             await send_document_webhook({
                 "storage_path": storage_path or upload_data.get("filename"),
