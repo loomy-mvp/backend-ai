@@ -286,6 +286,15 @@ async def send_document_webhook(document_webhook_payload: dict):
 def _store_file(storage_request: StorageRequest) -> dict:
     """Store a file in Google Cloud Storage following library conventions."""
 
+    logger.info(
+        "[_store_file] start library=%s org=%s user=%s filename=%s overwrite=%s",
+        storage_request.library,
+        storage_request.organization_id,
+        storage_request.user_id,
+        storage_request.filename,
+        storage_request.overwrite,
+    )
+
     if storage_request.library == "public":
         bucket_name = PUBLIC_BUCKET_NAME
     else:
@@ -310,6 +319,11 @@ def _store_file(storage_request: StorageRequest) -> dict:
 
     # storage_path = folder_prefix + storage_request.document_id + "-" + storage_request.filename
     storage_path = folder_prefix + storage_request.filename
+    logger.info(
+        "[_store_file] resolved bucket=%s storage_path=%s",
+        bucket_name,
+        storage_path,
+    )
     blob = bucket_obj.blob(storage_path)
 
     # Read file content - handle both UploadFile and bytes
@@ -321,7 +335,13 @@ def _store_file(storage_request: StorageRequest) -> dict:
         file_content = storage_request.file
 
     if blob.exists():
+        logger.info(
+            "[_store_file] existing blob found size=%s overwrite=%s",
+            blob.size,
+            storage_request.overwrite,
+        )
         if not storage_request.overwrite:
+            logger.info("[_store_file] overwrite disabled; skipping upload")
             return {
                 "status": "error",
                 "reason": "file_exists",
@@ -330,14 +350,21 @@ def _store_file(storage_request: StorageRequest) -> dict:
         else:
             # Check size to avoid unnecessary overwrite
             if blob.size == len(file_content):
+                logger.info("[_store_file] skip upload: same size existing blob")
                 return {
                     "status": "error",
                     "reason": "file_exists_same_size",
                     "storage_path": storage_path,
                 }
+            logger.info("[_store_file] overwriting existing blob with new content")
     
     blob.upload_from_string(file_content, content_type=storage_request.content_type)
     blob.make_public()
+    logger.info(
+        "[_store_file] uploaded size=%s content_type=%s",
+        len(file_content),
+        storage_request.content_type,
+    )
     return {"status": "uploaded", "storage_path": storage_path}
 
 def _embed_doc(embed_request: EmbedRequest):
@@ -396,10 +423,8 @@ def _embed_doc(embed_request: EmbedRequest):
         or mimetypes.guess_type(storage_path)[0]
     )
 
-    if re.search(r"/.*-(.*)", storage_path): # .* can be changed following the document-id pattern
-        doc_name = re.search(r"/.*-(.*)", storage_path).group(1)
-    else:
-        doc_name = storage_path.split("/")[-1].rsplit(".", 1)[0]
+    # Preserve the full filename (including hyphens) after the last '/'
+    doc_name = storage_path.split("/")[-1]
 
     try:
         processor = get_document_processor(content_type, storage_path)
