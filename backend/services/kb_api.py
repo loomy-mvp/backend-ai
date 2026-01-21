@@ -286,15 +286,6 @@ async def send_document_webhook(document_webhook_payload: dict):
 def _store_file(storage_request: StorageRequest) -> dict:
     """Store a file in Google Cloud Storage following library conventions."""
 
-    logger.info(
-        "[_store_file] start library=%s org=%s user=%s filename=%s overwrite=%s",
-        storage_request.library,
-        storage_request.organization_id,
-        storage_request.user_id,
-        storage_request.filename,
-        storage_request.overwrite,
-    )
-
     if storage_request.library == "public":
         bucket_name = PUBLIC_BUCKET_NAME
     else:
@@ -302,7 +293,7 @@ def _store_file(storage_request: StorageRequest) -> dict:
 
     try:
         bucket_obj = storage_client.get_bucket(bucket_name)
-    except Exception as exc:
+    except Exception:
         bucket = storage.Bucket(storage_client, name=bucket_name)
         bucket.location = BUCKET_LOCATION
         bucket_obj = storage_client.create_bucket(bucket)
@@ -317,16 +308,10 @@ def _store_file(storage_request: StorageRequest) -> dict:
     else:
         folder_prefix = ""
 
-    # storage_path = folder_prefix + storage_request.document_id + "-" + storage_request.filename
     storage_path = folder_prefix + storage_request.filename
-    logger.info(
-        "[_store_file] resolved bucket=%s storage_path=%s",
-        bucket_name,
-        storage_path,
-    )
-    blob = bucket_obj.blob(storage_path)
 
-    # Read file content - handle both UploadFile and bytes
+    blob = bucket_obj.get_blob(storage_path)
+
     if isinstance(storage_request.file, bytes):
         file_content = storage_request.file
     elif hasattr(storage_request.file, 'file'):
@@ -334,12 +319,7 @@ def _store_file(storage_request: StorageRequest) -> dict:
     else:
         file_content = storage_request.file
 
-    if blob.exists():
-        logger.info(
-            "[_store_file] existing blob found size=%s overwrite=%s",
-            blob.size,
-            storage_request.overwrite,
-        )
+    if blob:
         if not storage_request.overwrite:
             logger.info("[_store_file] overwrite disabled; skipping upload")
             return {
@@ -358,13 +338,11 @@ def _store_file(storage_request: StorageRequest) -> dict:
                 }
             logger.info("[_store_file] overwriting existing blob with new content")
     
+    # Create blob reference for upload if it didn't exist
+    if blob:
+        blob = bucket_obj.blob(storage_path)
     blob.upload_from_string(file_content, content_type=storage_request.content_type)
     blob.make_public()
-    logger.info(
-        "[_store_file] uploaded size=%s content_type=%s",
-        len(file_content),
-        storage_request.content_type,
-    )
     return {"status": "uploaded", "storage_path": storage_path}
 
 def _embed_doc(embed_request: EmbedRequest):
