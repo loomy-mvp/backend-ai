@@ -311,8 +311,8 @@ def _store_file(storage_request: StorageRequest) -> dict:
     storage_path = folder_prefix + storage_request.filename
 
     blob = bucket_obj.get_blob(storage_path)
-    logger.info(f"[_store_file] blob created with storage path: {storage_path}"
-    logger.info(f"[_store_file] blob object: {blob}"
+    logger.info(f"[_store_file] blob created with storage path: {storage_path}")
+    logger.info(f"[_store_file] blob object: {blob}")
     
     if isinstance(storage_request.file, bytes):
         file_content = storage_request.file
