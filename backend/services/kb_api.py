@@ -341,8 +341,8 @@ def _store_file(storage_request: StorageRequest) -> dict:
             logger.info("[_store_file] overwriting existing blob with new content")
     
     # Create blob reference for upload if it didn't exist
-    if blob:
-        blob = bucket_obj.blob(storage_path)
+    blob = bucket_obj.blob(storage_path)
+    
     blob.upload_from_string(file_content, content_type=storage_request.content_type)
     blob.make_public()
     return {"status": "uploaded", "storage_path": storage_path}
