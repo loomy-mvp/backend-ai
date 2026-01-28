@@ -1,7 +1,18 @@
 from typing import Final, Dict
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 
+# ============================================================================
+# Document Processing Prompts
+# ============================================================================
+
+IMAGE_ANALYSIS_PROMPT: Final[str] = (
+    "Describe the image and integrally report the text when present by organizing "
+    "it in a meaningful way accordingly with the picture description."
+)
+
+# ============================================================================
 # Tone of voice descriptions for system prompts
+# ============================================================================
 TONE_DESCRIPTIONS: Dict[str, str] = {
     "formal": "Usa un tono formale e professionale ma comprensibile, con un linguaggio preciso e tecnico appropriato al contesto di uno studio di commercialisti ma facilmente approcciabile. Se fai riferimenti al lettore usa il \"Lei\" formale.",
     "friendly": "Usa un tono professionale ma cordiale e accessibile, mantenendo competenza tecnica con un approccio più personale e disponibile, come se fossi un commercialista che stesse facendo consulenza a un suo amico e cliente. Se fai riferimenti al lettore usa il \"Tu\".",

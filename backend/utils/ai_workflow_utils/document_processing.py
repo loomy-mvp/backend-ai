@@ -8,19 +8,34 @@ components (e.g., embeddings, vector stores) can consume.
 
 from __future__ import annotations
 
+import base64
 import io
+import logging
+import time
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Type
+from typing import Callable, Dict, List, Optional, Tuple, Type
 
+import boto3
 import pdfplumber
+from botocore.config import Config
+from botocore.exceptions import ClientError
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 from docx.table import Table
 from openpyxl import load_workbook
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+from backend.config.document_processing_config import (
+    IMAGE_ANALYSIS_CONFIG,
+    MAX_IMAGE_SIZE_BYTES,
+    SUPPORTED_IMAGE_FORMATS,
+)
+from backend.config.prompts import IMAGE_ANALYSIS_PROMPT
+
+logger = logging.getLogger(__name__)
 
 Chunk = Dict[str, object]
 Chunker = Callable[[Dict[str, object], str], list[Chunk]]
@@ -43,7 +58,209 @@ def has_cid_corruption(text: str) -> bool:
 
 
 class DocumentProcessor(ABC):
-    """Base interface for document processors."""
+    """Base interface for document processors.
+    
+    Provides shared functionality for image analysis via AWS Bedrock,
+    which can be used by all subclasses when processing documents with images.
+    """
+
+    _bedrock_client = None
+
+    @classmethod
+    def _get_bedrock_client(cls):
+        """Get or create a shared Bedrock Runtime client."""
+        if cls._bedrock_client is None:
+            config = Config(
+                region_name=IMAGE_ANALYSIS_CONFIG.get("region", "eu-central-1"),
+                retries={
+                    "max_attempts": IMAGE_ANALYSIS_CONFIG.get("max_retries", 3),
+                    "mode": "adaptive",
+                },
+            )
+            cls._bedrock_client = boto3.client("bedrock-runtime", config=config)
+        return cls._bedrock_client
+
+    def analyze_image(
+        self,
+        image_bytes: bytes,
+        image_format: str,
+        context: str = "",
+    ) -> Optional[str]:
+        """Analyze an image using AWS Bedrock Nova Lite vision model.
+        
+        Args:
+            image_bytes: Raw bytes of the image
+            image_format: Format of the image (png, jpeg, gif, webp)
+            context: Optional context about where the image appears in the document
+            
+        Returns:
+            Description of the image including any text found, or None if analysis fails
+        """
+        # Validate image size
+        if len(image_bytes) > MAX_IMAGE_SIZE_BYTES:
+            logger.warning(
+                "Image exceeds maximum size (%d bytes > %d bytes), skipping analysis",
+                len(image_bytes),
+                MAX_IMAGE_SIZE_BYTES,
+            )
+            return None
+
+        # Validate format
+        if image_format.lower() not in ["png", "jpeg", "gif", "webp"]:
+            logger.warning("Unsupported image format: %s", image_format)
+            return None
+
+        # Build the prompt with optional context
+        prompt = IMAGE_ANALYSIS_PROMPT
+        if context:
+            prompt = f"{context}\n\n{prompt}"
+
+        # Build the message with image content
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "image": {
+                            "format": image_format.lower(),
+                            "source": {
+                                "bytes": image_bytes,
+                            },
+                        },
+                    },
+                    {
+                        "text": prompt,
+                    },
+                ],
+            }
+        ]
+
+        try:
+            return self._call_bedrock_with_retry(messages)
+        except Exception as e:
+            logger.error("Image analysis failed: %s", str(e))
+            return None
+
+    def analyze_multiple_images(
+        self,
+        images: List[Tuple[bytes, str]],
+        context: str = "",
+    ) -> Optional[str]:
+        """Analyze multiple images in a single Bedrock call.
+        
+        Args:
+            images: List of tuples (image_bytes, image_format)
+            context: Optional context about where the images appear
+            
+        Returns:
+            Combined description of all images, or None if analysis fails
+        """
+        if not images:
+            return None
+
+        # Filter valid images
+        valid_images = []
+        for image_bytes, image_format in images:
+            if len(image_bytes) > MAX_IMAGE_SIZE_BYTES:
+                logger.warning("Skipping oversized image in batch")
+                continue
+            if image_format.lower() not in ["png", "jpeg", "gif", "webp"]:
+                logger.warning("Skipping unsupported format in batch: %s", image_format)
+                continue
+            valid_images.append((image_bytes, image_format))
+
+        if not valid_images:
+            return None
+
+        # Build content blocks with all images
+        content_blocks: List[dict] = []
+        for image_bytes, image_format in valid_images:
+            content_blocks.append({
+                "image": {
+                    "format": image_format.lower(),
+                    "source": {
+                        "bytes": image_bytes,
+                    },
+                },
+            })
+
+        # Add the prompt
+        prompt = IMAGE_ANALYSIS_PROMPT
+        if context:
+            prompt = f"{context}\n\n{prompt}"
+        content_blocks.append({"text": prompt})
+
+        messages = [{"role": "user", "content": content_blocks}]
+
+        try:
+            return self._call_bedrock_with_retry(messages)
+        except Exception as e:
+            logger.error("Multi-image analysis failed: %s", str(e))
+            return None
+
+    def _call_bedrock_with_retry(self, messages: List[dict]) -> str:
+        """Call Bedrock API with retry logic for throttling.
+        
+        Args:
+            messages: The messages to send to the model
+            
+        Returns:
+            The model's response text
+            
+        Raises:
+            Exception: If the API call fails after retries
+        """
+        client = self._get_bedrock_client()
+        model_id = IMAGE_ANALYSIS_CONFIG["model_id"]
+        max_retries = IMAGE_ANALYSIS_CONFIG.get("max_retries", 3)
+        retry_delay = IMAGE_ANALYSIS_CONFIG.get("retry_delay_seconds", 5)
+
+        for attempt in range(max_retries):
+            try:
+                response = client.converse(
+                    modelId=model_id,
+                    messages=messages,
+                    inferenceConfig={
+                        "temperature": IMAGE_ANALYSIS_CONFIG.get("temperature", 0.3),
+                        "maxTokens": IMAGE_ANALYSIS_CONFIG.get("max_tokens", 2000),
+                        "topP": IMAGE_ANALYSIS_CONFIG.get("top_p", 0.9),
+                    },
+                )
+
+                # Extract the response text
+                output_message = response.get("output", {}).get("message", {})
+                content_blocks = output_message.get("content", [])
+
+                response_text = ""
+                for block in content_blocks:
+                    if "text" in block:
+                        response_text += block["text"]
+
+                # Log token usage
+                usage = response.get("usage", {})
+                logger.debug(
+                    "Image analysis tokens - Input: %d, Output: %d",
+                    usage.get("inputTokens", 0),
+                    usage.get("outputTokens", 0),
+                )
+
+                return response_text
+
+            except ClientError as exc:
+                error_code = (exc.response.get("Error") or {}).get("Code")
+                if error_code == "ThrottlingException" and attempt < max_retries - 1:
+                    logger.warning(
+                        "Bedrock throttled, sleeping %d seconds (attempt %d/%d)",
+                        retry_delay,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                raise
+
+        raise RuntimeError("Bedrock API call failed after all retries")
 
     @abstractmethod
     def process(
@@ -61,7 +278,47 @@ class PDFDocumentProcessor(DocumentProcessor):
     """Process PDF documents into text chunks.
     
     Skips documents with CID encoding corruption (symbolic fonts).
+    Extracts and analyzes images using Bedrock vision model.
     """
+
+    def _extract_page_images(self, page) -> List[Tuple[bytes, str]]:
+        """Extract all images from a PDF page.
+        
+        Args:
+            page: A pdfplumber page object
+            
+        Returns:
+            List of tuples (image_bytes, format)
+        """
+        images = []
+        try:
+            # pdfplumber provides access to images through the page
+            for img in page.images:
+                try:
+                    # Get the image data from the page
+                    # Images in pdfplumber are dictionaries with stream data
+                    if "stream" in img:
+                        stream = img["stream"]
+                        image_data = stream.get_data()
+                        
+                        # Determine format from stream properties
+                        # Default to png if we can't determine
+                        img_format = "png"
+                        filter_type = stream.get("/Filter", "")
+                        if "/DCTDecode" in str(filter_type):
+                            img_format = "jpeg"
+                        elif "/JPXDecode" in str(filter_type):
+                            img_format = "jpeg"
+                        
+                        if image_data and len(image_data) > 0:
+                            images.append((image_data, img_format))
+                except Exception as e:
+                    logger.debug("Failed to extract image from PDF page: %s", e)
+                    continue
+        except Exception as e:
+            logger.debug("Failed to iterate images on PDF page: %s", e)
+        
+        return images
 
     def process(
         self,
@@ -77,26 +334,63 @@ class PDFDocumentProcessor(DocumentProcessor):
             if pdf.pages:
                 first_page_text = pdf.pages[0].extract_text() or ""
                 if has_cid_corruption(first_page_text):
-                    print(f"[PDF] Skipping document '{doc_name}': CID encoding corruption detected")
-                    print(f"[PDF] This document uses symbolic fonts and requires OCR processing")
+                    logger.info("[PDF] Skipping document '%s': CID encoding corruption detected", doc_name)
+                    logger.info("[PDF] This document uses symbolic fonts and requires OCR processing")
                     raise ValueError(f"CID encoding corruption detected in '{doc_name}' - document skipped")
             
             for page_number, page in enumerate(pdf.pages, start=1):
                 page_text = page.extract_text() or ""
-                if not page_text.strip():
+                
+                # Double-check each page for CID corruption
+                if page_text.strip() and has_cid_corruption(page_text):
+                    logger.warning("[PDF] CID corruption detected on page %d of '%s'", page_number, doc_name)
+                    raise ValueError(f"CID encoding corruption detected on page {page_number} - document skipped")
+                
+                # Extract and analyze images on this page
+                page_images = self._extract_page_images(page)
+                image_descriptions: List[str] = []
+                
+                if page_images:
+                    logger.info("[PDF] Found %d image(s) on page %d of '%s'", len(page_images), page_number, doc_name)
+                    
+                    # Analyze images (batch if multiple)
+                    if len(page_images) == 1:
+                        description = self.analyze_image(
+                            page_images[0][0],
+                            page_images[0][1],
+                            context=f"Image from page {page_number} of PDF document '{doc_name}'"
+                        )
+                        if description:
+                            image_descriptions.append(description)
+                    else:
+                        description = self.analyze_multiple_images(
+                            page_images,
+                            context=f"Images from page {page_number} of PDF document '{doc_name}'"
+                        )
+                        if description:
+                            image_descriptions.append(description)
+                
+                # Combine text and image descriptions
+                combined_content_parts: List[str] = []
+                
+                if page_text.strip():
+                    combined_content_parts.append(page_text.strip())
+                
+                if image_descriptions:
+                    combined_content_parts.append("\n[Image Content]\n" + "\n".join(image_descriptions))
+                
+                if not combined_content_parts:
                     continue
                 
-                # Double-check each page (in case corruption appears later)
-                if has_cid_corruption(page_text):
-                    print(f"[PDF] CID corruption detected on page {page_number} of '{doc_name}'")
-                    raise ValueError(f"CID encoding corruption detected on page {page_number} - document skipped")
+                combined_text = "\n\n".join(combined_content_parts)
                 
                 doc_metadata = {
                     "name": doc_name,
                     "page": page_number,
                     "storage_path": storage_path,
+                    "has_images": len(page_images) > 0,
                 }
-                chunks.extend(chunk_document(doc_metadata, page_text))
+                chunks.extend(chunk_document(doc_metadata, combined_text))
         return chunks
 
 
@@ -120,7 +414,7 @@ class TextDocumentProcessor(DocumentProcessor):
             text = file_bytes.decode('latin-1')
         
         if not text.strip():
-            print(f"[TXT] Skipping empty document '{doc_name}'")
+            logger.info("[TXT] Skipping empty document '%s'", doc_name)
             return chunks
         
         # Text files don't have pages, so we treat the whole file as page 1
@@ -137,12 +431,63 @@ class DocxDocumentProcessor(DocumentProcessor):
     """Process DOCX documents into text chunks.
     
     Extracts text from paragraphs, tables, headers, and footers.
-    Skips sections that contain images (to be handled separately via OCR).
+    Extracts and analyzes embedded images using Bedrock vision model.
     """
+
+    def _get_images_from_paragraph(self, paragraph, doc) -> List[Tuple[bytes, str]]:
+        """Extract images from a paragraph.
+        
+        Args:
+            paragraph: A python-docx paragraph object
+            doc: The parent Document object (needed to access relationships)
+            
+        Returns:
+            List of tuples (image_bytes, format)
+        """
+        images = []
+        
+        # Find drawing elements (inline images)
+        drawing_elements = paragraph._element.findall('.//' + qn('w:drawing'))
+        for drawing in drawing_elements:
+            # Look for blip elements that contain the image reference
+            blip_elements = drawing.findall('.//' + qn('a:blip'))
+            for blip in blip_elements:
+                embed_id = blip.get(qn('r:embed'))
+                if embed_id:
+                    try:
+                        # Get the image part from relationships
+                        image_part = doc.part.related_parts.get(embed_id)
+                        if image_part:
+                            image_bytes = image_part.blob
+                            # Determine format from content type
+                            content_type = image_part.content_type
+                            img_format = SUPPORTED_IMAGE_FORMATS.get(content_type, "png")
+                            images.append((image_bytes, img_format))
+                    except Exception as e:
+                        logger.debug("Failed to extract image from DOCX paragraph: %s", e)
+        
+        # Also check for legacy picture elements
+        picture_elements = paragraph._element.findall('.//' + qn('w:pict'))
+        for pict in picture_elements:
+            # Legacy images use v:imagedata
+            imagedata_elements = pict.findall('.//' + '{urn:schemas-microsoft-com:vml}imagedata')
+            for imagedata in imagedata_elements:
+                rel_id = imagedata.get(qn('r:id'))
+                if rel_id:
+                    try:
+                        image_part = doc.part.related_parts.get(rel_id)
+                        if image_part:
+                            image_bytes = image_part.blob
+                            content_type = image_part.content_type
+                            img_format = SUPPORTED_IMAGE_FORMATS.get(content_type, "png")
+                            images.append((image_bytes, img_format))
+                    except Exception as e:
+                        logger.debug("Failed to extract legacy image from DOCX: %s", e)
+        
+        return images
 
     def _has_images_in_paragraph(self, paragraph) -> bool:
         """Check if a paragraph contains embedded images."""
-        # Check for inline images (drawings and pictures)
         drawing_elements = paragraph._element.findall('.//' + qn('w:drawing'))
         picture_elements = paragraph._element.findall('.//' + qn('w:pict'))
         return len(drawing_elements) > 0 or len(picture_elements) > 0
@@ -152,9 +497,17 @@ class DocxDocumentProcessor(DocumentProcessor):
         table_text_parts: List[str] = []
         for row in table.rows:
             row_cells = [cell.text.strip() for cell in row.cells]
-            # Join cells with tab separator for structure
             table_text_parts.append(" | ".join(row_cells))
         return "\n".join(table_text_parts)
+
+    def _get_images_from_table(self, table: Table, doc) -> List[Tuple[bytes, str]]:
+        """Extract all images from a table."""
+        images = []
+        for row in table.rows:
+            for cell in row.cells:
+                for paragraph in cell.paragraphs:
+                    images.extend(self._get_images_from_paragraph(paragraph, doc))
+        return images
 
     def _has_images_in_table(self, table: Table) -> bool:
         """Check if a table contains any images."""
@@ -178,116 +531,83 @@ class DocxDocumentProcessor(DocumentProcessor):
         try:
             doc = DocxDocument(io.BytesIO(file_bytes))
         except Exception as e:
-            print(f"[DOCX] Failed to open document '{doc_name}': {e}")
+            logger.error("[DOCX] Failed to open document '%s': %s", doc_name, e)
             raise ValueError(f"Failed to open DOCX document '{doc_name}': {e}")
 
-        # Track if document has any extractable content
-        has_content = False
+        all_text_parts: List[str] = []
+        all_images: List[Tuple[bytes, str]] = []
         
-        # Extract text from main body
-        # We'll process the document as sections, treating each logical block
-        # Note: DOCX doesn't have page numbers directly, we simulate with sections
-        section_number = 1
-        current_section_text: List[str] = []
-        section_has_images = False
+        # Process paragraphs
+        for paragraph in doc.paragraphs:
+            # Extract text
+            text = paragraph.text.strip()
+            if text:
+                all_text_parts.append(text)
+            
+            # Extract images
+            paragraph_images = self._get_images_from_paragraph(paragraph, doc)
+            if paragraph_images:
+                all_images.extend(paragraph_images)
         
-        # Iterate through body elements in order (paragraphs and tables)
-        for element in doc.element.body:
-            # Check if element is a paragraph
-            if element.tag == qn('w:p'):
-                for paragraph in doc.paragraphs:
-                    if paragraph._element == element:
-                        # Check for images in this paragraph
-                        if self._has_images_in_paragraph(paragraph):
-                            section_has_images = True
-                            print(f"[DOCX] Image detected in section {section_number} of '{doc_name}' - skipping section")
-                            break
-                        
-                        text = paragraph.text.strip()
-                        if text:
-                            current_section_text.append(text)
-                        break
+        # Process tables
+        for table in doc.tables:
+            # Extract text
+            table_text = self._extract_table_text(table)
+            if table_text.strip():
+                all_text_parts.append(table_text)
             
-            # Check if element is a table
-            elif element.tag == qn('w:tbl'):
-                for table in doc.tables:
-                    if table._tbl == element:
-                        if self._has_images_in_table(table):
-                            section_has_images = True
-                            print(f"[DOCX] Image detected in table in section {section_number} of '{doc_name}' - skipping section")
-                            break
-                        
-                        table_text = self._extract_table_text(table)
-                        if table_text.strip():
-                            current_section_text.append(table_text)
-                        break
-            
-            # Check for section breaks to split content
-            if element.tag == qn('w:sectPr') or (
-                element.tag == qn('w:p') and 
-                element.find('.//' + qn('w:sectPr')) is not None
-            ):
-                # End of section - process accumulated text
-                if current_section_text and not section_has_images:
-                    section_text = "\n\n".join(current_section_text)
-                    if section_text.strip():
-                        has_content = True
-                        doc_metadata = {
-                            "name": doc_name,
-                            "page": section_number,
-                            "storage_path": storage_path,
-                        }
-                        chunks.extend(chunk_document(doc_metadata, section_text))
-                
-                section_number += 1
-                current_section_text = []
-                section_has_images = False
+            # Extract images from table
+            table_images = self._get_images_from_table(table, doc)
+            if table_images:
+                all_images.extend(table_images)
         
-        # Process any remaining content
-        if current_section_text and not section_has_images:
-            section_text = "\n\n".join(current_section_text)
-            if section_text.strip():
-                has_content = True
-                doc_metadata = {
-                    "name": doc_name,
-                    "page": section_number,
-                    "storage_path": storage_path,
-                }
-                chunks.extend(chunk_document(doc_metadata, section_text))
-        
-        # Fallback: if structured parsing didn't work, try simple extraction
-        if not has_content:
-            all_text_parts: List[str] = []
-            has_any_images = False
+        # Analyze images if present
+        image_descriptions: List[str] = []
+        if all_images:
+            logger.info("[DOCX] Found %d image(s) in '%s'", len(all_images), doc_name)
             
-            for paragraph in doc.paragraphs:
-                if self._has_images_in_paragraph(paragraph):
-                    has_any_images = True
-                    continue  # Skip paragraphs with images
-                text = paragraph.text.strip()
-                if text:
-                    all_text_parts.append(text)
-            
-            for table in doc.tables:
-                if self._has_images_in_table(table):
-                    has_any_images = True
-                    continue
-                table_text = self._extract_table_text(table)
-                if table_text.strip():
-                    all_text_parts.append(table_text)
-            
-            if all_text_parts:
-                full_text = "\n\n".join(all_text_parts)
-                doc_metadata = {
-                    "name": doc_name,
-                    "page": 1,
-                    "storage_path": storage_path,
-                }
-                chunks.extend(chunk_document(doc_metadata, full_text))
-            elif has_any_images:
-                print(f"[DOCX] Document '{doc_name}' contains only images - requires OCR processing")
+            if len(all_images) == 1:
+                description = self.analyze_image(
+                    all_images[0][0],
+                    all_images[0][1],
+                    context=f"Image from DOCX document '{doc_name}'"
+                )
+                if description:
+                    image_descriptions.append(description)
             else:
-                print(f"[DOCX] No extractable text found in '{doc_name}'")
+                # Batch analyze images (up to 5 at a time to avoid token limits)
+                batch_size = 5
+                for i in range(0, len(all_images), batch_size):
+                    batch = all_images[i:i + batch_size]
+                    description = self.analyze_multiple_images(
+                        batch,
+                        context=f"Images from DOCX document '{doc_name}'"
+                    )
+                    if description:
+                        image_descriptions.append(description)
+        
+        # Combine text and image descriptions
+        combined_content_parts: List[str] = []
+        
+        if all_text_parts:
+            combined_content_parts.append("\n\n".join(all_text_parts))
+        
+        if image_descriptions:
+            combined_content_parts.append("\n[Image Content]\n" + "\n\n".join(image_descriptions))
+        
+        if not combined_content_parts:
+            logger.info("[DOCX] No extractable content found in '%s'", doc_name)
+            return chunks
+        
+        combined_text = "\n\n".join(combined_content_parts)
+        
+        doc_metadata = {
+            "name": doc_name,
+            "page": 1,
+            "storage_path": storage_path,
+            "has_images": len(all_images) > 0,
+        }
+        chunks.extend(chunk_document(doc_metadata, combined_text))
         
         return chunks
 
@@ -297,6 +617,7 @@ class XlsxDocumentProcessor(DocumentProcessor):
     
     Treats each worksheet as a separate "page" for chunking purposes.
     Extracts data from cells, preserving row/column structure.
+    Extracts and analyzes embedded images using Bedrock vision model.
     """
 
     def _format_cell_value(self, cell) -> str:
@@ -327,6 +648,57 @@ class XlsxDocumentProcessor(DocumentProcessor):
         
         return "\n".join(rows_text)
 
+    def _extract_images_from_workbook(self, file_bytes: bytes) -> Dict[str, List[Tuple[bytes, str]]]:
+        """Extract images from workbook, organized by sheet name.
+        
+        Note: We need to re-open the workbook without read_only mode to access images.
+        
+        Returns:
+            Dict mapping sheet names to lists of (image_bytes, format) tuples
+        """
+        images_by_sheet: Dict[str, List[Tuple[bytes, str]]] = {}
+        
+        try:
+            # Open workbook without read_only to access images
+            workbook = load_workbook(io.BytesIO(file_bytes), data_only=False, read_only=False)
+            
+            for sheet_name in workbook.sheetnames:
+                sheet = workbook[sheet_name]
+                sheet_images: List[Tuple[bytes, str]] = []
+                
+                # openpyxl stores images in _images attribute
+                if hasattr(sheet, '_images'):
+                    for image in sheet._images:
+                        try:
+                            # Get image data
+                            image_data = image._data()
+                            if image_data:
+                                # Try to determine format from the image
+                                # Default to png
+                                img_format = "png"
+                                if hasattr(image, 'path') and image.path:
+                                    ext = Path(image.path).suffix.lower()
+                                    if ext in ['.jpg', '.jpeg']:
+                                        img_format = "jpeg"
+                                    elif ext == '.gif':
+                                        img_format = "gif"
+                                    elif ext == '.webp':
+                                        img_format = "webp"
+                                
+                                sheet_images.append((image_data, img_format))
+                        except Exception as e:
+                            logger.debug("Failed to extract image from sheet '%s': %s", sheet_name, e)
+                
+                if sheet_images:
+                    images_by_sheet[sheet_name] = sheet_images
+            
+            workbook.close()
+            
+        except Exception as e:
+            logger.debug("Failed to extract images from workbook: %s", e)
+        
+        return images_by_sheet
+
     def process(
         self,
         file_bytes: bytes,
@@ -337,6 +709,9 @@ class XlsxDocumentProcessor(DocumentProcessor):
     ) -> list[Chunk]:
         chunks: list[Chunk] = []
         
+        # First, extract images from the workbook (separate pass)
+        images_by_sheet = self._extract_images_from_workbook(file_bytes)
+        
         try:
             # data_only=True gets computed values instead of formulas
             workbook = load_workbook(
@@ -345,38 +720,73 @@ class XlsxDocumentProcessor(DocumentProcessor):
                 read_only=True
             )
         except Exception as e:
-            print(f"[XLSX] Failed to open workbook '{doc_name}': {e}")
+            logger.error("[XLSX] Failed to open workbook '%s': %s", doc_name, e)
             raise ValueError(f"Failed to open XLSX workbook '{doc_name}': {e}")
         
         try:
             sheet_names = workbook.sheetnames
             
             if not sheet_names:
-                print(f"[XLSX] No worksheets found in '{doc_name}'")
+                logger.info("[XLSX] No worksheets found in '%s'", doc_name)
                 return chunks
             
             for page_number, sheet_name in enumerate(sheet_names, start=1):
                 try:
                     sheet = workbook[sheet_name]
                 except Exception as e:
-                    print(f"[XLSX] Failed to access sheet '{sheet_name}' in '{doc_name}': {e}")
+                    logger.warning("[XLSX] Failed to access sheet '%s' in '%s': %s", sheet_name, doc_name, e)
                     continue
                 
                 sheet_text = self._extract_sheet_text(sheet)
+                sheet_images = images_by_sheet.get(sheet_name, [])
                 
-                if not sheet_text.strip():
-                    print(f"[XLSX] Skipping empty sheet '{sheet_name}' in '{doc_name}'")
+                # Analyze images if present
+                image_descriptions: List[str] = []
+                if sheet_images:
+                    logger.info(
+                        "[XLSX] Found %d image(s) in sheet '%s' of '%s'",
+                        len(sheet_images), sheet_name, doc_name
+                    )
+                    
+                    if len(sheet_images) == 1:
+                        description = self.analyze_image(
+                            sheet_images[0][0],
+                            sheet_images[0][1],
+                            context=f"Image from sheet '{sheet_name}' of Excel workbook '{doc_name}'"
+                        )
+                        if description:
+                            image_descriptions.append(description)
+                    else:
+                        description = self.analyze_multiple_images(
+                            sheet_images,
+                            context=f"Images from sheet '{sheet_name}' of Excel workbook '{doc_name}'"
+                        )
+                        if description:
+                            image_descriptions.append(description)
+                
+                # Combine text and image descriptions
+                combined_content_parts: List[str] = []
+                
+                if sheet_text.strip():
+                    # Include sheet name as context for the chunk
+                    sheet_header = f"[Sheet: {sheet_name}]\n\n"
+                    combined_content_parts.append(sheet_header + sheet_text)
+                
+                if image_descriptions:
+                    combined_content_parts.append("\n[Image Content]\n" + "\n".join(image_descriptions))
+                
+                if not combined_content_parts:
+                    logger.debug("[XLSX] Skipping empty sheet '%s' in '%s'", sheet_name, doc_name)
                     continue
                 
-                # Include sheet name as context for the chunk
-                sheet_header = f"[Sheet: {sheet_name}]\n\n"
-                full_text = sheet_header + sheet_text
+                full_text = "\n\n".join(combined_content_parts)
                 
                 doc_metadata = {
                     "name": doc_name,
                     "page": page_number,
                     "sheet_name": sheet_name,
                     "storage_path": storage_path,
+                    "has_images": len(sheet_images) > 0,
                 }
                 chunks.extend(chunk_document(doc_metadata, full_text))
         
@@ -384,7 +794,7 @@ class XlsxDocumentProcessor(DocumentProcessor):
             workbook.close()
         
         if not chunks:
-            print(f"[XLSX] No extractable content found in '{doc_name}'")
+            logger.info("[XLSX] No extractable content found in '%s'", doc_name)
         
         return chunks
 
@@ -394,26 +804,71 @@ class PptxDocumentProcessor(DocumentProcessor):
     
     Treats each slide as a separate "page" for chunking purposes.
     Extracts text from shapes, text frames, and tables.
-    Skips slides that contain images (to be handled separately via OCR).
+    Extracts and analyzes images using Bedrock vision model.
     """
 
     def _shape_has_image(self, shape) -> bool:
         """Check if a shape is or contains an image."""
-        # Check for picture shapes
         if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
             return True
-        
-        # Check for linked/embedded images
         if shape.shape_type == MSO_SHAPE_TYPE.LINKED_PICTURE:
             return True
-        
-        # Check for placeholders that might contain images
         if hasattr(shape, 'placeholder_format') and shape.placeholder_format:
-            # Picture placeholders
             if shape.placeholder_format.type and 'PICTURE' in str(shape.placeholder_format.type):
                 return True
-        
         return False
+
+    def _extract_image_from_shape(self, shape) -> Optional[Tuple[bytes, str]]:
+        """Extract image bytes and format from a picture shape.
+        
+        Args:
+            shape: A python-pptx shape object
+            
+        Returns:
+            Tuple of (image_bytes, format) or None if extraction fails
+        """
+        try:
+            if shape.shape_type in (MSO_SHAPE_TYPE.PICTURE, MSO_SHAPE_TYPE.LINKED_PICTURE):
+                # Get the image from the shape
+                image = shape.image
+                image_bytes = image.blob
+                
+                # Determine format from content type
+                content_type = image.content_type
+                img_format = SUPPORTED_IMAGE_FORMATS.get(content_type, "png")
+                
+                return (image_bytes, img_format)
+        except Exception as e:
+            logger.debug("Failed to extract image from PPTX shape: %s", e)
+        
+        return None
+
+    def _get_images_from_slide(self, slide) -> List[Tuple[bytes, str]]:
+        """Extract all images from a slide.
+        
+        Args:
+            slide: A python-pptx slide object
+            
+        Returns:
+            List of tuples (image_bytes, format)
+        """
+        images = []
+        
+        for shape in slide.shapes:
+            if self._shape_has_image(shape):
+                img_data = self._extract_image_from_shape(shape)
+                if img_data:
+                    images.append(img_data)
+            
+            # Check grouped shapes
+            if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                for sub_shape in shape.shapes:
+                    if self._shape_has_image(sub_shape):
+                        img_data = self._extract_image_from_shape(sub_shape)
+                        if img_data:
+                            images.append(img_data)
+        
+        return images
 
     def _extract_shape_text(self, shape) -> Optional[str]:
         """Extract text from a shape if it has a text frame."""
@@ -434,7 +889,6 @@ class PptxDocumentProcessor(DocumentProcessor):
         for row in table.rows:
             cell_texts: List[str] = []
             for cell in row.cells:
-                # Extract text from cell's text frame
                 cell_text_parts: List[str] = []
                 for paragraph in cell.text_frame.paragraphs:
                     para_text = "".join(run.text for run in paragraph.runs)
@@ -443,18 +897,6 @@ class PptxDocumentProcessor(DocumentProcessor):
                 cell_texts.append(" ".join(cell_text_parts))
             rows_text.append(" | ".join(cell_texts))
         return "\n".join(rows_text)
-
-    def _slide_has_images(self, slide) -> bool:
-        """Check if a slide contains any images."""
-        for shape in slide.shapes:
-            if self._shape_has_image(shape):
-                return True
-            # Check grouped shapes
-            if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
-                for sub_shape in shape.shapes:
-                    if self._shape_has_image(sub_shape):
-                        return True
-        return False
 
     def process(
         self,
@@ -469,24 +911,16 @@ class PptxDocumentProcessor(DocumentProcessor):
         try:
             presentation = Presentation(io.BytesIO(file_bytes))
         except Exception as e:
-            print(f"[PPTX] Failed to open presentation '{doc_name}': {e}")
+            logger.error("[PPTX] Failed to open presentation '%s': %s", doc_name, e)
             raise ValueError(f"Failed to open PPTX presentation '{doc_name}': {e}")
         
         if not presentation.slides:
-            print(f"[PPTX] No slides found in '{doc_name}'")
+            logger.info("[PPTX] No slides found in '%s'", doc_name)
             return chunks
         
-        slides_with_images: List[int] = []
-        
         for slide_number, slide in enumerate(presentation.slides, start=1):
-            # Check if slide contains images - skip for now
-            if self._slide_has_images(slide):
-                slides_with_images.append(slide_number)
-                print(f"[PPTX] Slide {slide_number} of '{doc_name}' contains images - skipping")
-                # For now, skip slides with images
-                continue
-            
             slide_text_parts: List[str] = []
+            slide_images: List[Tuple[bytes, str]] = []
             
             # Extract slide title if available
             if slide.shapes.title and slide.shapes.title.has_text_frame:
@@ -494,10 +928,17 @@ class PptxDocumentProcessor(DocumentProcessor):
                 if title_text:
                     slide_text_parts.append(f"# {title_text}")
             
-            # Extract text from all shapes
+            # Extract text and images from all shapes
             for shape in slide.shapes:
                 # Skip title as we already processed it
                 if shape == slide.shapes.title:
+                    continue
+                
+                # Extract images
+                if self._shape_has_image(shape):
+                    img_data = self._extract_image_from_shape(shape)
+                    if img_data:
+                        slide_images.append(img_data)
                     continue
                 
                 # Handle tables
@@ -510,7 +951,11 @@ class PptxDocumentProcessor(DocumentProcessor):
                 # Handle grouped shapes
                 if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
                     for sub_shape in shape.shapes:
-                        if sub_shape.has_text_frame:
+                        if self._shape_has_image(sub_shape):
+                            img_data = self._extract_image_from_shape(sub_shape)
+                            if img_data:
+                                slide_images.append(img_data)
+                        elif sub_shape.has_text_frame:
                             text = self._extract_shape_text(sub_shape)
                             if text:
                                 slide_text_parts.append(text)
@@ -522,27 +967,55 @@ class PptxDocumentProcessor(DocumentProcessor):
                     if text:
                         slide_text_parts.append(text)
             
-            if not slide_text_parts:
-                print(f"[PPTX] Slide {slide_number} of '{doc_name}' has no extractable text")
+            # Analyze images if present
+            image_descriptions: List[str] = []
+            if slide_images:
+                logger.info(
+                    "[PPTX] Found %d image(s) on slide %d of '%s'",
+                    len(slide_images), slide_number, doc_name
+                )
+                
+                if len(slide_images) == 1:
+                    description = self.analyze_image(
+                        slide_images[0][0],
+                        slide_images[0][1],
+                        context=f"Image from slide {slide_number} of PowerPoint '{doc_name}'"
+                    )
+                    if description:
+                        image_descriptions.append(description)
+                else:
+                    description = self.analyze_multiple_images(
+                        slide_images,
+                        context=f"Images from slide {slide_number} of PowerPoint '{doc_name}'"
+                    )
+                    if description:
+                        image_descriptions.append(description)
+            
+            # Combine text and image descriptions
+            combined_content_parts: List[str] = []
+            
+            if slide_text_parts:
+                combined_content_parts.append("\n\n".join(slide_text_parts))
+            
+            if image_descriptions:
+                combined_content_parts.append("\n[Image Content]\n" + "\n".join(image_descriptions))
+            
+            if not combined_content_parts:
+                logger.debug("[PPTX] Slide %d of '%s' has no extractable content", slide_number, doc_name)
                 continue
             
-            slide_text = "\n\n".join(slide_text_parts)
+            slide_text = "\n\n".join(combined_content_parts)
             
             doc_metadata = {
                 "name": doc_name,
                 "page": slide_number,
                 "storage_path": storage_path,
+                "has_images": len(slide_images) > 0,
             }
             chunks.extend(chunk_document(doc_metadata, slide_text))
         
-        if slides_with_images:
-            print(f"[PPTX] '{doc_name}': {len(slides_with_images)} slide(s) skipped due to images: {slides_with_images}")
-        
         if not chunks:
-            if slides_with_images:
-                print(f"[PPTX] Document '{doc_name}' contains only image slides - requires OCR processing")
-            else:
-                print(f"[PPTX] No extractable content found in '{doc_name}'")
+            logger.info("[PPTX] No extractable content found in '%s'", doc_name)
         
         return chunks
 
@@ -651,14 +1124,14 @@ class XmlDocumentProcessor(DocumentProcessor):
             try:
                 xml_content = file_bytes.decode('latin-1')
             except UnicodeDecodeError:
-                print(f"[XML] Failed to decode '{doc_name}' with UTF-8 or Latin-1")
+                logger.error("[XML] Failed to decode '%s' with UTF-8 or Latin-1", doc_name)
                 raise ValueError(f"Failed to decode XML document '{doc_name}'")
         
         # Parse XML
         try:
             root = ET.fromstring(xml_content)
         except ET.ParseError as e:
-            print(f"[XML] Failed to parse XML document '{doc_name}': {e}")
+            logger.error("[XML] Failed to parse XML document '%s': %s", doc_name, e)
             raise ValueError(f"Failed to parse XML document '{doc_name}': {e}")
         
         # Extract text content
@@ -670,7 +1143,7 @@ class XmlDocumentProcessor(DocumentProcessor):
             extracted_text = "\n".join(all_texts)
         
         if not extracted_text.strip():
-            print(f"[XML] No text content found in '{doc_name}'")
+            logger.info("[XML] No text content found in '%s'", doc_name)
             return chunks
         
         # Add root element info as context
