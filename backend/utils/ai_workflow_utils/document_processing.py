@@ -342,7 +342,7 @@ class PDFDocumentProcessor(DocumentProcessor):
         chunks: list[Chunk] = []
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
             # Check first page for CID corruption before processing entire document
-            if pdf.pages:
+            if pdf.pages: # TODO: Check len(pdf.pages) < n per evitare OOM
                 first_page_text = pdf.pages[0].extract_text() or ""
                 if has_cid_corruption(first_page_text):
                     logger.info("[PDF] Skipping document '%s': CID encoding corruption detected", doc_name)
@@ -824,9 +824,14 @@ class PptxDocumentProcessor(DocumentProcessor):
             return True
         if shape.shape_type == MSO_SHAPE_TYPE.LINKED_PICTURE:
             return True
-        if hasattr(shape, 'placeholder_format') and shape.placeholder_format:
-            if shape.placeholder_format.type and 'PICTURE' in str(shape.placeholder_format.type):
-                return True
+        # Accessing placeholder_format on non-placeholder shapes raises ValueError
+        try:
+            if hasattr(shape, 'placeholder_format') and shape.placeholder_format:
+                if shape.placeholder_format.type and 'PICTURE' in str(shape.placeholder_format.type):
+                    return True
+        except ValueError:
+            # Shape is not a placeholder, which is fine
+            pass
         return False
 
     def _extract_image_from_shape(self, shape) -> Optional[Tuple[bytes, str]]:
