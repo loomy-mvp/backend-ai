@@ -25,6 +25,7 @@ from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 from docx.table import Table
 from openpyxl import load_workbook
+from PIL import Image
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
@@ -284,6 +285,9 @@ class PDFDocumentProcessor(DocumentProcessor):
     def _extract_page_images(self, page) -> List[Tuple[bytes, str]]:
         """Extract all images from a PDF page.
         
+        Uses pdfplumber to crop and render each image region as PNG,
+        ensuring the output is a valid image format for Bedrock.
+        
         Args:
             page: A pdfplumber page object
             
@@ -292,26 +296,33 @@ class PDFDocumentProcessor(DocumentProcessor):
         """
         images = []
         try:
-            # pdfplumber provides access to images through the page
+            # pdfplumber provides image metadata including bounding boxes
             for img in page.images:
                 try:
-                    # Get the image data from the page
-                    # Images in pdfplumber are dictionaries with stream data
-                    if "stream" in img:
-                        stream = img["stream"]
-                        image_data = stream.get_data()
+                    # Get image bounding box
+                    x0 = img.get("x0", 0)
+                    top = img.get("top", 0)
+                    x1 = img.get("x1", 0)
+                    bottom = img.get("bottom", 0)
+                    
+                    # Skip if bounding box is invalid or too small
+                    if x1 <= x0 or bottom <= top:
+                        continue
+                    if (x1 - x0) < 10 or (bottom - top) < 10:
+                        continue
+                    
+                    # Crop the page to the image region and convert to PIL Image
+                    cropped = page.crop((x0, top, x1, bottom))
+                    pil_image = cropped.to_image(resolution=150).original
+                    
+                    # Convert to PNG bytes
+                    img_buffer = io.BytesIO()
+                    pil_image.save(img_buffer, format="PNG")
+                    image_bytes = img_buffer.getvalue()
+                    
+                    if image_bytes and len(image_bytes) > 100:  # Skip tiny/empty images
+                        images.append((image_bytes, "png"))
                         
-                        # Determine format from stream properties
-                        # Default to png if we can't determine
-                        img_format = "png"
-                        filter_type = stream.get("/Filter", "")
-                        if "/DCTDecode" in str(filter_type):
-                            img_format = "jpeg"
-                        elif "/JPXDecode" in str(filter_type):
-                            img_format = "jpeg"
-                        
-                        if image_data and len(image_data) > 0:
-                            images.append((image_data, img_format))
                 except Exception as e:
                     logger.debug("Failed to extract image from PDF page: %s", e)
                     continue
