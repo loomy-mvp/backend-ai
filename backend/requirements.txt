@@ -11,4 +11,7 @@ langchain
 aiohttp
 beautifulsoup4
 tenacity
-lxml 
+lxml
+python-docx
+openpyxl
+python-pptx
