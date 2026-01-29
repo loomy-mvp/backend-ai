@@ -183,6 +183,15 @@ def chunk_document(doc_metadata: str, content: str, max_similarity: float = 0.70
     if not paragraphs:
         return []
     
+    # If only one paragraph, return it directly without embedding (will be embedded later in _embed_doc)
+    if len(paragraphs) == 1:
+        return [{
+            "chunk_id": f"{doc_metadata['name']}-{str(uuid.uuid4())}",
+            "page": doc_metadata["page"],
+            "text": paragraphs[0],
+            "storage_path": doc_metadata["storage_path"]
+        }]
+    
     chunks = []
     current_chunk = paragraphs[0]
     current_chunk_texts = [current_chunk]
