@@ -350,8 +350,10 @@ class PrincipiContabiliScraper:
         # Generate PDF filename from title
         pdf_filename = f"{self._slugify(title)}.pdf"
         
-        # Check if already uploaded
+        # Check if already uploaded - stop incrementally when existing file found
         if self._already_uploaded(pdf_filename, subfolder):
+            logger.info("🛑 Found existing file; stopping scraper for incremental mode.")
+            self.stop_requested = True
             return False
         
         # Download DOC file
