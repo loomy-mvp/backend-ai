@@ -13,6 +13,7 @@ TONE_DESCRIPTIONS: Dict[str, str] = {
 
 CHAT_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
         ("system", "{system_prompt}"),
+        ("user", "<<<Current Date>>>\n{current_date}\n"),
         ("user", "<<<Chat history>>>\n{chat_history}\n"),
         ("user", "<<<Context>>>\n{context}\n"),
         MessagesPlaceholder(variable_name="question_messages")

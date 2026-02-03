@@ -423,8 +423,12 @@ async def process_chat_request(chat_data: dict):
         
         question_messages = _build_question_messages(message, image_inputs)
 
+        # Get current date
+        current_date = datetime.now().strftime("%Y-%m-%d")
+
         logger.info("[process_chat_request] LLM payload: " + str({
             "system_prompt": system_message,
+            "current_date": current_date,
             "context": context,
             "question_messages": "with_images" if image_inputs else "text_only",
             "chat_history": chat_history
@@ -433,6 +437,7 @@ async def process_chat_request(chat_data: dict):
         # Generate response
         response = await chain.ainvoke({
             "system_prompt": system_message,
+            "current_date": current_date,
             "context": context,
             "question_messages": question_messages,
             "chat_history": chat_history
