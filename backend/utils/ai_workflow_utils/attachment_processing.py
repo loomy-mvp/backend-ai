@@ -9,6 +9,7 @@ parsing needed for PDFs and plain-text files.
 from __future__ import annotations
 
 import io
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -16,33 +17,47 @@ import pdfplumber
 
 from backend.utils.ai_workflow_utils.document_processing import has_cid_corruption
 
+logger = logging.getLogger(__name__)
+
 
 class AttachmentProcessingError(ValueError):
     """Raised when attachment text cannot be extracted (e.g., CID corruption)."""
 
 
 def _extract_pdf_text(file_bytes: bytes, filename: str) -> str:
-    """Return the concatenated text of all PDF pages."""
-    pages_text: list[str] = []
+    """Return the concatenated text of all PDF pages.
+
+    Pages are processed one at a time and their internal resources are
+    released immediately via ``page.flush_cache()`` so that only one
+    page's worth of parsed objects lives in memory at any moment.
+    """
+    buf = io.StringIO()
+    first_page = True
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-        if pdf.pages:
-            first_page_text = pdf.pages[0].extract_text() or ""
-            if has_cid_corruption(first_page_text):
-                raise AttachmentProcessingError(
-                    f"CID encoding corruption detected in '{filename}'"
-                )
-
         for page in pdf.pages:
-            page_text = page.extract_text() or ""
-            if not page_text.strip():
-                continue
-            if has_cid_corruption(page_text):
-                raise AttachmentProcessingError(
-                    f"CID encoding corruption detected on page {page.page_number} of '{filename}'"
-                )
-            pages_text.append(page_text.strip())
+            try:
+                page_text = page.extract_text() or ""
 
-    return "\n\n".join(pages_text)
+                if not page_text.strip():
+                    continue
+
+                if has_cid_corruption(page_text):
+                    raise AttachmentProcessingError(
+                        f"CID encoding corruption detected on page "
+                        f"{page.page_number} of '{filename}'"
+                    )
+
+                if not first_page:
+                    buf.write("\n\n")
+                buf.write(page_text.strip())
+                first_page = False
+            finally:
+                # Release the heavy parsed objects for this page immediately
+                page.flush_cache()
+
+    result = buf.getvalue()
+    buf.close()
+    return result
 
 
 def _extract_text_file(file_bytes: bytes) -> str:

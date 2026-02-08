@@ -153,6 +153,9 @@ def _build_attachment_context(attachments: Optional[List[dict]]) -> tuple[str, i
         except Exception as exc:
             logger.warning("[attachments] Failed to decode %s: %s", filename, exc)
             continue
+        finally:
+            # Free the base64 string as soon as it has been decoded
+            attachment.pop("data", None)
 
         resolved_type = (content_type or inferred_type or mimetypes.guess_type(filename)[0] or "").lower()
 
@@ -162,6 +165,9 @@ def _build_attachment_context(attachments: Optional[List[dict]]) -> tuple[str, i
             except AttachmentProcessingError as exc:
                 logger.warning("[attachments] Skipping text attachment %s: %s", filename, exc)
                 continue
+            finally:
+                # Free raw bytes immediately after text extraction
+                del file_bytes
 
             normalized_text = text_payload.strip()
             if not normalized_text:
@@ -175,12 +181,15 @@ def _build_attachment_context(attachments: Optional[List[dict]]) -> tuple[str, i
             except Exception as exc:
                 logger.warning("[attachments] Failed to encode image %s: %s", filename, exc)
                 continue
+            finally:
+                del file_bytes
             image_inputs.append({
                 "filename": filename,
                 "data_url": data_url,
             })
         else:
             logger.warning("[attachments] Unsupported attachment type for %s (%s)", filename, resolved_type or "unknown")
+            del file_bytes
 
     text_context = "\n----------\n".join(text_sections)
     return text_context, len(text_sections), image_inputs
