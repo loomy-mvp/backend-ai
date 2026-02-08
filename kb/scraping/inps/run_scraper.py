@@ -5,6 +5,7 @@ Runs the INPS scraper and exits
 
 import argparse
 import logging
+import os
 import sys
 
 # Load environment variables from .env file (for local development)
@@ -14,6 +15,15 @@ try:
 except ImportError:
     # dotenv not installed - will use system environment variables
     pass
+
+# Fix for Cloud Run: Clear GOOGLE_APPLICATION_CREDENTIALS if file doesn't exist
+# This allows Google Cloud SDK to use the default service account credentials
+if 'GOOGLE_APPLICATION_CREDENTIALS' in os.environ:
+    creds_path = os.environ['GOOGLE_APPLICATION_CREDENTIALS']
+    if not os.path.exists(creds_path):
+        print(f"Warning: GOOGLE_APPLICATION_CREDENTIALS points to non-existent file: {creds_path}")
+        print("Clearing environment variable to use default Cloud Run service account credentials")
+        del os.environ['GOOGLE_APPLICATION_CREDENTIALS']
 
 from src.scrape_inps import INPSScraper
 

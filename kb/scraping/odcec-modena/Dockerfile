@@ -14,12 +14,17 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ChromeDriver matching Chrome version
-RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d. -f1) \
-    && wget -O /tmp/chrome-for-testing.json https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json \
-    && CHROMEDRIVER_URL=$(python3 -c "import json, sys; data=json.load(open('/tmp/chrome-for-testing.json')); print(data['channels']['Stable']['downloads']['chromedriver'][0]['url'] if 'chromedriver' in data['channels']['Stable']['downloads'] else '')") \
+RUN CHROME_VERSION=$(google-chrome --version | awk '{print $3}') \
+    && CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d. -f1) \
+    && echo "Chrome version: $CHROME_VERSION (major: $CHROME_MAJOR)" \
+    && wget -O /tmp/chrome-for-testing.json "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json" \
+    && CHROMEDRIVER_URL=$(python3 -c "import json; data=json.load(open('/tmp/chrome-for-testing.json')); versions=[v for v in data['versions'] if v['version'].startswith('$CHROME_MAJOR.')]; latest=sorted(versions, key=lambda x: x['version'], reverse=True)[0] if versions else None; print(latest['downloads']['chromedriver'][0]['url'] if latest and 'chromedriver' in latest['downloads'] else '')") \
     && if [ -z "$CHROMEDRIVER_URL" ]; then \
-         CHROMEDRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/$(curl -s https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE)/linux64/chromedriver-linux64.zip"; \
+         echo "Falling back to LATEST_RELEASE for major version $CHROME_MAJOR"; \
+         LATEST_VERSION=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_$CHROME_MAJOR") && \
+         CHROMEDRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/$LATEST_VERSION/linux64/chromedriver-linux64.zip"; \
        fi \
+    && echo "Downloading ChromeDriver from: $CHROMEDRIVER_URL" \
     && wget -O /tmp/chromedriver.zip "$CHROMEDRIVER_URL" \
     && unzip /tmp/chromedriver.zip -d /tmp/ \
     && mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/ \
