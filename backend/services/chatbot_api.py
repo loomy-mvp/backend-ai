@@ -30,7 +30,16 @@ KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
 from backend.config.chatbot_config import CHATBOT_CONFIG, SIMILARITY_THRESHOLD
-from backend.config.prompts import NO_RAG_SYSTEM_PROMPT, RAG_SYSTEM_PROMPT, CHAT_PROMPT_TEMPLATE, TONE_DESCRIPTIONS
+from backend.config.prompts import (
+    NO_RAG_SYSTEM_PROMPT,
+    RAG_SYSTEM_PROMPT,
+    CHAT_PROMPT_TEMPLATE,
+    TONE_DESCRIPTIONS,
+    format_attachment_block,
+    format_docs,
+    format_context,
+    build_question_messages,
+)
 
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.utils.ai_workflow_utils.get_llm import get_llm
@@ -119,12 +128,6 @@ def _is_image_attachment(content_type: Optional[str], filename: str) -> bool:
     return extension in IMAGE_ATTACHMENT_EXTENSIONS
 
 
-def _format_attachment_block(filename: str, text: str) -> str:
-    return f"""<Attachment>
-|Source|: {filename}
-|Content|: {text.strip()}"""
-
-
 def _encode_image_data_url(content_type: Optional[str], data: bytes, filename: str) -> str:
     # TODO: To reference a GCS location after persisting the image, modify this function accordingly.
     guessed_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
@@ -174,7 +177,7 @@ def _build_attachment_context(attachments: Optional[List[dict]]) -> tuple[str, i
                 logger.info("[attachments] No text extracted from %s", filename)
                 continue
 
-            text_sections.append(_format_attachment_block(filename, normalized_text))
+            text_sections.append(format_attachment_block(filename, normalized_text))
         elif _is_image_attachment(resolved_type, filename):
             try:
                 data_url = _encode_image_data_url(resolved_type, file_bytes, filename)
@@ -193,18 +196,6 @@ def _build_attachment_context(attachments: Optional[List[dict]]) -> tuple[str, i
 
     text_context = "\n----------\n".join(text_sections)
     return text_context, len(text_sections), image_inputs
-
-
-def _build_question_messages(question: str, image_inputs: List[dict]) -> List[HumanMessage]:
-    content_parts: list[Any] = [
-        {"type": "text", "text": f"<<<Prompt>>>\n{question}"}
-    ]
-
-    for image in image_inputs:
-        content_parts.append({"type": "text", "text": f"[Image Attachment: {image['filename']}]"})
-        content_parts.append({"type": "image_url", "image_url": {"url": image["data_url"]}})
-
-    return [HumanMessage(content=content_parts)]
 
 
 def _guess_attachment_filename(content_type: Optional[str], index: int) -> str:
@@ -321,23 +312,6 @@ def retrieve_relevant_docs(
     print(retrieval.get("results", []))
     return retrieval.get("results", [])
 
-def format_docs(docs: List[dict]) -> str:
-    """Format retrieved documents for the prompt."""
-    if not docs:
-        return ""
-    
-    formatted_docs = []
-    for i, doc in enumerate(docs, 1):
-        content = doc.get("chunk_text", "")
-        source = doc.get("doc_name", "")
-        
-        formatted_doc = f"""<Document {i}>
-        |Source|: {source}
-        |Content|: {content}"""
-        formatted_docs.append(formatted_doc)
-    
-    return "\n----------\n".join(formatted_docs)
-
 async def process_chat_request(chat_data: dict):
     """Background task to process chat request with RAG functionality."""
     try:
@@ -414,23 +388,16 @@ async def process_chat_request(chat_data: dict):
                 docs = []
         
         # Format documents as context
-        ### Format attachments
-        context_sections: list[str] = []
-        if attachment_context:
-            context_sections.append(f"<<<User Attachments>>>\n{attachment_context}")
-        ### Format KB retrieved docs
         formatted_docs = format_docs(docs)
-        if formatted_docs:
-            context_sections.append(f"<<<Knowledge Base>>>\n{formatted_docs}")
-        context = "\n\n".join(context_sections)
+        context = format_context(attachment_context, formatted_docs)
         logger.info("[process_chat_request] Context formatted from attachments and retrieval")
-        logger.info("[process_chat_request] Attachment context: " + attachment_context)
+        logger.info("[process_chat_request] Attachment context: " + attachment_context[:50])
         
         # Create RAG chain
         chain = create_chain(llm=llm, prompt_template=CHAT_PROMPT_TEMPLATE)
         logger.info(f"[process_chat_request] {'RAG' if retrieve else 'Plain'} chain created")
         
-        question_messages = _build_question_messages(message, image_inputs)
+        question_messages = build_question_messages(message, image_inputs)
 
         # Get current date
         current_date = datetime.now().strftime("%Y-%m-%d")
