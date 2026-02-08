@@ -266,31 +266,7 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
             "namespace": namespace,
         }
     
-    # Check if document is already embedded when overwrite=False
-    if not embed_request.overwrite and pc.has_index(index_name):
-        try:
-            index = pc.Index(name=index_name)
-            # Query for any vector with this storage_path
-            query_result = index.query(
-                vector=[0] * 1536,  # Dummy vector just to check metadata
-                filter={"storage_path": {"$eq": storage_path}},
-                top_k=1,
-                include_metadata=True
-            )
-            
-            if query_result.matches and len(query_result.matches) > 0:
-                logger.info(f"Document {storage_path} already embedded in index, skipping")
-                return {
-                    "status": "skipped",
-                    "message": f"Document already embedded (overwrite=False)",
-                    "chunks": 0,
-                    "vectors": [],
-                    "index_name": index_name,
-                    "namespace": namespace,
-                }
-        except Exception as e:
-            logger.warning(f"Unable to check if document exists in index: {e}")
-            # Continue with embedding if check fails
+    # Note: Existence check removed - batch_embedder pre-filters via get_existing_storage_paths()
     
     if pc.has_index(index_name) and embed_request.overwrite:
         try:

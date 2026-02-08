@@ -79,6 +79,43 @@ class BatchEmbedder:
             user_id or "N/A"
         )
     
+    def get_existing_storage_paths(self, index_name: str = "public") -> set:
+        """
+        Query Pinecone to get all storage_path values already embedded.
+        Uses pagination to iterate through all vectors.
+        Returns a set of storage paths for O(1) lookup.
+        Raises exception if unable to fetch - prevents re-embedding all files.
+        """
+        if not self.pc.has_index(index_name):
+            logger.info(f"Index {index_name} does not exist, no existing paths")
+            return set()
+        
+        index = self.pc.Index(name=index_name)
+        existing_paths = set()
+        
+        # index.list() returns a generator that yields batches of IDs
+        # It handles pagination internally, but we need to chunk the fetch calls
+        page_count = 0
+        
+        for ids_batch in index.list():
+            if not ids_batch:
+                continue
+            
+            page_count += 1
+            logger.info(f"Page {page_count}: fetching metadata for {len(ids_batch)} vectors...")
+            
+            # Chunk the IDs into small batches to avoid "414 Request-URI Too Large"
+            chunk_size = 10
+            for i in range(0, len(ids_batch), chunk_size):
+                ids_chunk = list(ids_batch[i:i + chunk_size])
+                fetch_result = index.fetch(ids=ids_chunk)
+                for vector_id, vector_data in fetch_result.vectors.items():
+                    if vector_data.metadata and "storage_path" in vector_data.metadata:
+                        existing_paths.add(vector_data.metadata["storage_path"])
+        
+        logger.info(f"Found {len(existing_paths)} unique documents already embedded in index (scanned {page_count} pages)")
+        return existing_paths
+    
     def list_files_in_folders(self, bucket_name: str, folders: List[str]) -> List[Dict[str, str]]:
         """
         List all files in the specified folders (recursively includes subfolders).
@@ -124,19 +161,52 @@ class BatchEmbedder:
     def process_files(self, bucket_name: str, folders: List[str], overwrite: bool = False) -> Dict[str, Any]:
         files = self.list_files_in_folders(bucket_name, folders)
         
+        # Pre-filter files that are already embedded (when overwrite=False)
+        # This avoids per-file Pinecone queries and allows early exit
+        files_to_process = files
+        skipped_existing = 0
+        
+        if not overwrite:
+            logger.info("Fetching existing embeddings from Pinecone for incremental update...")
+            existing_paths = self.get_existing_storage_paths(index_name="public")
+            
+            if existing_paths:
+                files_to_process = [
+                    f for f in files 
+                    if f['storage_path'] not in existing_paths
+                ]
+                skipped_existing = len(files) - len(files_to_process)
+                logger.info(
+                    f"Skipping {skipped_existing} already-embedded files, "
+                    f"{len(files_to_process)} files to process"
+                )
+                
+                # Early exit if nothing to process
+                if not files_to_process:
+                    logger.info("All files already embedded, nothing to do!")
+                    return {
+                        'total_files': len(files),
+                        'processed': 0,
+                        'failed': 0,
+                        'skipped': skipped_existing,
+                        'total_chunks': 0,
+                        'total_vectors': 0,
+                        'errors': []
+                    }
+        
         stats = {
             'total_files': len(files),
             'processed': 0,
             'failed': 0,
-            'skipped': 0,
+            'skipped': skipped_existing,  # Include pre-filtered files
             'total_chunks': 0,
             'total_vectors': 0,
             'errors': []
         }
         
-        for i, file_info in enumerate(files, 1):
+        for i, file_info in enumerate(files_to_process, 1):
             storage_path = file_info['storage_path']
-            logger.info(f"[{i}/{len(files)}] Processing: {storage_path}")
+            logger.info(f"[{i}/{len(files_to_process)}] Processing: {storage_path}")
             
             try:
                 embed_request = EmbedRequest(
