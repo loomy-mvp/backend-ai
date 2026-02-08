@@ -97,28 +97,44 @@ class DeleteFileRequest(BaseModel):
 
 def delete_public_document(
     storage_path: str | None = None,
+    storage_path_prefix: str | None = None,
     *,
     source: str | None = None,
     bucket_name: str = "loomy-public-documents",
 ) -> None:
-    """Delete public content from GCS (when storage_path provided) and matching vectors from Pinecone."""
-    if not storage_path and not source:
-        raise ValueError("Either storage_path or source is required")
-    if storage_path and source:
-        raise ValueError("Provide only storage_path or source, not both")
+    """Delete public content from GCS and matching vectors from Pinecone.
+    
+    Args:
+        storage_path: Exact path to delete a single file
+        storage_path_prefix: Prefix to delete multiple files (GCS only, not Pinecone)
+        source: Source identifier to delete vectors
+        bucket_name: GCS bucket name
+    """
+    # Validate that exactly one deletion criterion is provided
+    provided_params = sum([
+        storage_path is not None,
+        source is not None,
+        storage_path_prefix is not None
+    ])
+    if provided_params == 0:
+        raise ValueError("Must provide one of: storage_path, source, or storage_path_prefix")
+    if provided_params > 1:
+        raise ValueError("Provide only one of: storage_path, source, or storage_path_prefix")
 
     normalized_path: str | None = None
 
-    # GCS (only when deleting a specific file)
+    # GCS deletion
+    bucket = storage_client.get_bucket(bucket_name)
+    
     if storage_path:
+        # Delete single file
         if not storage_path.strip():
-            raise ValueError("storage_path is required")
+            raise ValueError("storage_path cannot be empty")
 
         normalized_path = storage_path.lstrip("/")
         if not normalized_path:
-            raise ValueError("storage_path cannot be empty")
+            raise ValueError("storage_path cannot be empty after normalization")
 
-        bucket = storage_client.get_bucket(bucket_name)
         blob = bucket.blob(normalized_path)
         if not blob.exists():
             logger.warning(
@@ -129,12 +145,42 @@ def delete_public_document(
         else:
             blob.delete()
             logger.info(f"[delete_public_document] Deleted file from GCS: {normalized_path}")
+    
+    elif storage_path_prefix:
+        # Delete multiple files by prefix
+        if not storage_path_prefix.strip():
+            raise ValueError("storage_path_prefix cannot be empty")
+        
+        normalized_prefix = storage_path_prefix.lstrip("/")
+        blobs = list(bucket.list_blobs(prefix=normalized_prefix))
+        
+        if not blobs:
+            logger.warning(
+                "[delete_public_document] No files found with prefix %s in %s",
+                normalized_prefix,
+                bucket_name,
+            )
+            # Store empty list for later Pinecone deletion attempt
+            storage_paths_to_delete = []
+        else:
+            # Collect storage paths before deletion
+            storage_paths_to_delete = [blob.name for blob in blobs]
+            
+            deleted_count = 0
+            for blob in blobs:
+                blob.delete()
+                deleted_count += 1
+            logger.info(
+                f"[delete_public_document] Deleted {deleted_count} files from GCS with prefix: {normalized_prefix}"
+            )
 
+    # Validate and normalize source if provided
     normalized_source: str | None = None
     if source:
         normalized_source = source.strip()
         if not normalized_source:
             raise ValueError("source cannot be empty")
+        logger.info(f"[delete_public_document] Skipping GCS deletion for source-based filter: {normalized_source}")
 
     # Pinecone
     index_name = "public"
@@ -147,23 +193,196 @@ def delete_public_document(
 
     try:
         index = pc.Index(name=index_name)
+        
         if normalized_path:
+            # Delete by exact storage_path match using query-then-delete
             filter_clause = {"storage_path": {"$eq": normalized_path}}
-        else:
+            filter_description = f"storage_path={normalized_path}"
+            
+            # Query to get vector IDs
+            try:
+                results = index.query(
+                    vector=[0.0] * 1536,  # Dummy vector
+                    filter=filter_clause,
+                    top_k=10000,
+                    include_metadata=False
+                )
+                
+                if results.matches:
+                    ids_to_delete = [match.id for match in results.matches]
+                    index.delete(ids=ids_to_delete)
+                    pinecone_deleted = len(ids_to_delete)
+                    logger.info(
+                        "[delete_public_document] Deleted %s vectors for path: %s",
+                        pinecone_deleted,
+                        normalized_path
+                    )
+                else:
+                    pinecone_deleted = 0
+                    logger.info(
+                        "[delete_public_document] No vectors found for path: %s",
+                        normalized_path
+                    )
+            except Exception as e:
+                logger.error(
+                    "[delete_public_document] Error during query/delete for path: %s",
+                    e
+                )
+                pinecone_deleted = 0
+                
+        elif normalized_source:
+            # Delete by source match using query-then-delete with iteration
             filter_clause = {"source": {"$eq": normalized_source}}
-
-        delete_response = index.delete(filter=filter_clause)
-        pinecone_deleted = (
-            delete_response.get("deleted_count", 0)
-            if isinstance(delete_response, dict)
-            else 0
-        )
-        logger.info(
-            "[delete_public_document] Deleted %s vectors from Pinecone using %s=%s",
-            pinecone_deleted,
-            "storage_path" if normalized_path else "source",
-            normalized_path or normalized_source,
-        )
+            filter_description = f"source={normalized_source}"
+            
+            pinecone_deleted = 0
+            iteration = 0
+            max_iterations = 100
+            
+            # Loop until no more matching vectors found
+            while iteration < max_iterations:
+                try:
+                    results = index.query(
+                        vector=[0.0] * 1536,  # Dummy vector
+                        filter=filter_clause,
+                        top_k=10000,
+                        include_metadata=False
+                    )
+                    
+                    if not results.matches:
+                        logger.info(
+                            "[delete_public_document] No more vectors found for source after %s iterations",
+                            iteration
+                        )
+                        break
+                    
+                    # Delete in batches of 1000
+                    ids_to_delete = [match.id for match in results.matches]
+                    batch_size = 1000
+                    for i in range(0, len(ids_to_delete), batch_size):
+                        batch = ids_to_delete[i:i + batch_size]
+                        index.delete(ids=batch)
+                        pinecone_deleted += len(batch)
+                    
+                    logger.info(
+                        "[delete_public_document] Iteration %s: deleted %s vectors (total: %s)",
+                        iteration + 1,
+                        len(ids_to_delete),
+                        pinecone_deleted
+                    )
+                    
+                    iteration += 1
+                    
+                    # If we got fewer than 10k results, we're done
+                    if len(results.matches) < 10000:
+                        break
+                        
+                except Exception as e:
+                    logger.error(
+                        "[delete_public_document] Error during iteration %s: %s",
+                        iteration,
+                        e
+                    )
+                    break
+        elif storage_path_prefix:
+            # Use the storage paths retrieved from GCS
+            normalized_prefix = storage_path_prefix.lstrip("/")
+            filter_description = f"storage_path_prefix={normalized_prefix}"
+            
+            if not storage_paths_to_delete:
+                logger.warning("[delete_public_document] No storage paths to delete from Pinecone")
+                pinecone_deleted = 0
+            else:
+                # Extract source from first path to optimize queries
+                # e.g., "fondazione-nazionale-commercialisti/..." -> "fondazione-nazionale-commercialisti"
+                source_hint = normalized_prefix.split("/")[0] if "/" in normalized_prefix else None
+                
+                logger.info(
+                    "[delete_public_document] Querying and deleting vectors for prefix: %s",
+                    normalized_prefix
+                )
+                
+                pinecone_deleted = 0
+                iteration = 0
+                max_iterations = 100  # Safety limit
+                
+                # Loop until no more matching vectors found
+                while iteration < max_iterations:
+                    # Query for vectors matching the source filter
+                    query_filter = {"source": {"$eq": source_hint}} if source_hint else {}
+                    
+                    try:
+                        results = index.query(
+                            vector=[0.0] * 1536,  # Dummy vector
+                            filter=query_filter,
+                            top_k=10000,
+                            include_metadata=True
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "[delete_public_document] Error querying vectors: %s",
+                            e
+                        )
+                        break
+                    
+                    if not results.matches:
+                        logger.info(
+                            "[delete_public_document] No more vectors found after %s iterations",
+                            iteration
+                        )
+                        break
+                    
+                    # Filter matches by storage_path prefix
+                    matching_ids = [
+                        match.id for match in results.matches
+                        if match.metadata.get("storage_path", "").startswith(normalized_prefix)
+                    ]
+                    
+                    if not matching_ids:
+                        logger.info(
+                            "[delete_public_document] No matching vectors for prefix after filtering"
+                        )
+                        break
+                    
+                    # Delete in batches of 1000
+                    batch_size = 1000
+                    for i in range(0, len(matching_ids), batch_size):
+                        batch = matching_ids[i:i + batch_size]
+                        try:
+                            index.delete(ids=batch)
+                            pinecone_deleted += len(batch)
+                            logger.debug(
+                                "[delete_public_document] Deleted batch of %s vectors",
+                                len(batch)
+                            )
+                        except Exception as e:
+                            logger.error(
+                                "[delete_public_document] Error deleting batch: %s",
+                                e
+                            )
+                    
+                    logger.info(
+                        "[delete_public_document] Iteration %s: deleted %s vectors (total so far: %s)",
+                        iteration + 1,
+                        len(matching_ids),
+                        pinecone_deleted
+                    )
+                    
+                    iteration += 1
+                    
+                    # If we got fewer than 10k results, we're done
+                    if len(results.matches) < 10000:
+                        break
+                
+                logger.info(
+                    "[delete_public_document] Completed deletion: %s vectors for prefix: %s",
+                    pinecone_deleted,
+                    normalized_prefix
+                )
+        else:
+            raise ValueError("No valid filter criterion for Pinecone deletion")
+        
+        # Total logged by individual branches above
     except Exception as exc:
         logger.error("[delete_public_document] Error deleting from Pinecone: %s", exc, exc_info=True)
         raise
