@@ -1179,6 +1179,7 @@ class XmlDocumentProcessor(DocumentProcessor):
 _CONTENT_TYPE_PROCESSORS: Dict[str, Type[DocumentProcessor]] = {
     "application/pdf": PDFDocumentProcessor,
     "text/plain": TextDocumentProcessor,
+    "text/csv": TextDocumentProcessor,
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": DocxDocumentProcessor,
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": XlsxDocumentProcessor,
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": PptxDocumentProcessor,
@@ -1189,6 +1190,7 @@ _CONTENT_TYPE_PROCESSORS: Dict[str, Type[DocumentProcessor]] = {
 _EXTENSION_FALLBACKS: Dict[str, Type[DocumentProcessor]] = {
     ".pdf": PDFDocumentProcessor,
     ".txt": TextDocumentProcessor,
+    ".csv": TextDocumentProcessor,
     ".docx": DocxDocumentProcessor,
     ".xlsx": XlsxDocumentProcessor,
     ".pptx": PptxDocumentProcessor,
