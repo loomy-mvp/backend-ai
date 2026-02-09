@@ -93,8 +93,16 @@ class RetrieveRequest(BaseModel):
     sources: list[str] | None = None
 
 
-TEXT_ATTACHMENT_TYPES = {"application/pdf", "text/plain"}
-TEXT_ATTACHMENT_EXTENSIONS = {".pdf", ".txt"}
+TEXT_ATTACHMENT_TYPES = {
+    "application/pdf",
+    "text/plain",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/xml",
+    "text/xml",
+}
+TEXT_ATTACHMENT_EXTENSIONS = {".pdf", ".txt", ".docx", ".xlsx", ".pptx", ".xml"}
 IMAGE_ATTACHMENT_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 
