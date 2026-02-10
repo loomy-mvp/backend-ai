@@ -341,21 +341,13 @@ class PDFDocumentProcessor(DocumentProcessor):
     ) -> list[Chunk]:
         chunks: list[Chunk] = []
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            # Check first page for CID corruption before processing entire document
-            if pdf.pages: # TODO: Check len(pdf.pages) < n per evitare OOM
-                first_page_text = pdf.pages[0].extract_text() or ""
-                if has_cid_corruption(first_page_text):
-                    logger.info("[PDF] Skipping document '%s': CID encoding corruption detected", doc_name)
-                    logger.info("[PDF] This document uses symbolic fonts and requires OCR processing")
-                    raise ValueError(f"CID encoding corruption detected in '{doc_name}' - document skipped")
-            
             for page_number, page in enumerate(pdf.pages, start=1):
                 page_text = page.extract_text() or ""
                 
-                # Double-check each page for CID corruption
+                # Skip pages with CID corruption (symbolic fonts that can't be decoded)
                 if page_text.strip() and has_cid_corruption(page_text):
-                    logger.warning("[PDF] CID corruption detected on page %d of '%s'", page_number, doc_name)
-                    raise ValueError(f"CID encoding corruption detected on page {page_number} - document skipped")
+                    logger.warning("[PDF] Skipping page %d of '%s': CID encoding corruption detected", page_number, doc_name)
+                    continue
                 
                 # Extract and analyze images on this page
                 page_images = self._extract_page_images(page)
