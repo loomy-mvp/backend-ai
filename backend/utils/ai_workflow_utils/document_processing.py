@@ -237,6 +237,9 @@ class DocumentProcessor(ABC):
                     if "text" in block:
                         response_text += block["text"]
 
+                # Log the full response text
+                logger.info("Image analysis response text: %s", response_text)
+
                 # Log token usage
                 usage = response.get("usage", {})
                 logger.debug(
