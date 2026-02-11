@@ -281,7 +281,7 @@ class DocumentProcessor(ABC):
 class PDFDocumentProcessor(DocumentProcessor):
     """Process PDF documents into text chunks.
     
-    Skips documents with CID encoding corruption (symbolic fonts).
+    Skips pages with CID encoding corruption (symbolic fonts).
     Extracts and analyzes images using Bedrock vision model.
     """
 
@@ -343,7 +343,18 @@ class PDFDocumentProcessor(DocumentProcessor):
         doc_name: str,
     ) -> list[Chunk]:
         chunks: list[Chunk] = []
+        
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            total_pages = len(pdf.pages)
+            
+            # Skip very large PDFs to avoid OOM
+            if total_pages > 700:
+                logger.warning(
+                    "[PDF] Skipping '%s': %d pages exceeds limit of 700 pages",
+                    doc_name, total_pages
+                )
+                return chunks
+            
             for page_number, page in enumerate(pdf.pages, start=1):
                 page_text = page.extract_text() or ""
                 
