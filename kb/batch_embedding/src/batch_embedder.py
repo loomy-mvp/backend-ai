@@ -1,5 +1,6 @@
 """Batch Embedder for processing multiple documents from GCS to Pinecone"""
 
+import gc
 import json
 import logging
 import os
@@ -18,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 
 from backend.config.chatbot_config import EMBEDDING_CONFIG
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
-from .kb_helpers import _embed_doc, _upsert_to_vector_store, EmbedRequest, UpsertRequest
+from .kb_helpers import _embed_and_upsert_doc, EmbedRequest
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,10 @@ class BatchEmbedder:
                     f"{len(files_to_process)} files to process"
                 )
                 
+                # Free the lookup set — no longer needed
+                del existing_paths
+                gc.collect()
+                
                 # Early exit if nothing to process
                 if not files_to_process:
                     logger.info("All files already embedded, nothing to do!")
@@ -219,60 +224,45 @@ class BatchEmbedder:
                     overwrite=overwrite
                 )
                 
-                logger.info(f"  Embedding document...")
-                embed_result = _embed_doc(embed_request)
+                logger.info(f"  Embedding & upserting document (streaming)...")
+                result = _embed_and_upsert_doc(embed_request)
                 
-                if embed_result.get('status') == 'skipped':
-                    logger.info(f"  Skipped (already embedded)")
+                status = result.get('status')
+                
+                if status == 'skipped':
+                    logger.info(f"  Skipped: {result.get('message', '')}")
                     stats['skipped'] += 1
-                    continue
-                
-                if embed_result.get('status') != 'success':
-                    error_msg = embed_result.get('message', 'Unknown error')
-                    
-                    # Check if it's an unsupported file type error
-                    if 'No document processor available' in error_msg:
-                        logger.warning(f"  Skipped (unsupported file type): {error_msg}")
-                        stats['skipped'] += 1
-                    else:
-                        logger.error(f"  Embedding failed: {error_msg}")
-                        stats['failed'] += 1
-                        stats['errors'].append({'file': storage_path, 'step': 'embedding', 'error': error_msg})
-                    continue
-                
-                chunks = embed_result.get('chunks', 0)
-                vectors = embed_result.get('vectors', [])
-                logger.info(f"  Generated {chunks} chunks and {len(vectors)} vectors")
-                
-                if not vectors:
-                    logger.warning(f"  No vectors generated, skipping upsert")
-                    stats['skipped'] += 1
-                    continue
-                
-                upsert_request = UpsertRequest(
-                    index_name=embed_result['index_name'],
-                    namespace=embed_result['namespace'],
-                    vectors=vectors
-                )
-                
-                logger.info(f"  Upserting {len(vectors)} vectors to Pinecone...")
-                upsert_result = _upsert_to_vector_store(upsert_request)
-                
-                if upsert_result.get('status') == 'success':
-                    upserted = upsert_result.get('upserted', 0)
-                    logger.info(f"  ✓ Successfully upserted {upserted} vectors")
+                elif status == 'success':
+                    chunks = result.get('chunks', 0)
+                    upserted = result.get('upserted', 0)
+                    logger.info(f"  ✓ {chunks} chunks, {upserted} vectors upserted")
                     stats['processed'] += 1
                     stats['total_chunks'] += chunks
                     stats['total_vectors'] += upserted
                 else:
-                    logger.error(f"  Upsert failed")
-                    stats['failed'] += 1
-                    stats['errors'].append({'file': storage_path, 'step': 'upsert', 'error': 'Upsert failed'})
+                    error_msg = result.get('message', 'Unknown error')
+                    if 'No document processor available' in error_msg:
+                        logger.warning(f"  Skipped (unsupported file type): {error_msg}")
+                        stats['skipped'] += 1
+                    else:
+                        logger.error(f"  Failed: {error_msg}")
+                        stats['failed'] += 1
+                        stats['errors'].append({'file': storage_path, 'step': 'embed_and_upsert', 'error': error_msg})
+                
+                del result
                 
             except Exception as e:
                 logger.error(f"  Error processing file: {e}", exc_info=True)
                 stats['failed'] += 1
                 stats['errors'].append({'file': storage_path, 'step': 'general', 'error': str(e)})
+            finally:
+                # Full GC every 25 files to reclaim accumulated memory
+                if i % 25 == 0:
+                    gc.collect()
+                    logger.info(f"  [GC] Garbage collected after {i} files")
+        
+        # Final GC after all files processed
+        gc.collect()
         
         if stats['errors']:
             self._write_failure_report(stats['errors'])
@@ -286,7 +276,7 @@ class BatchEmbedder:
         if not (self.failure_log_bucket and self.failure_log_blob):
             logger.debug("Failure log destination not configured; skipping upload")
             return
-        timestamp = datetime.utcnow().isoformat()
+        timestamp = datetime.now().isoformat()
         lines = [
             f"{failure.get('file', 'unknown')} | {failure.get('step', 'unknown')} | {failure.get('error', 'unknown')}"
             for failure in failures

@@ -1,26 +1,22 @@
 """
 Minimal helper functions for batch embedding without FastAPI dependencies.
-Replicates only the necessary functions from backend.services.kb_api
+Provides streaming embed+upsert to avoid OOM on large documents.
 """
 
+import gc
 import json
 import logging
-import os
-import re
 import mimetypes
-import uuid
-import unicodedata
-import gc
-from typing import Any, Dict, List
-from pathlib import Path
+import os
 import sys
+from pathlib import Path
+from typing import Any, Dict, List
 
 from google.cloud import storage
 from google.oauth2 import service_account
 import cohere
-from pinecone import Pinecone, Vector
+from pinecone import Pinecone
 from pydantic import BaseModel
-import numpy as np
 
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
@@ -28,10 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.config.chatbot_config import EMBEDDING_CONFIG
 from backend.utils.ai_workflow_utils.document_processing import get_document_processor
+from backend.utils.ai_workflow_utils.chunking import chunk_document
 
 logger = logging.getLogger(__name__)
 
-MAX_CHUNK_CHAR_LENGTH = 8000  # keeps Pinecone metadata comfortably below 40 KB
 PINECONE_MAX_REQUEST_BYTES = 2 * 1024 * 1024  # Pinecone hard limit per request
 PINECONE_SAFE_REQUEST_BYTES = int(PINECONE_MAX_REQUEST_BYTES * 0.9)  # Stay well under the cap
 
@@ -52,167 +48,9 @@ pinecone_api_key = os.getenv("PINECONE_API_KEY")
 pc = Pinecone(api_key=pinecone_api_key)
 
 
-def cosine_similarity(a, b):
-    """Calculate cosine similarity between two vectors."""
-    a = np.array(a)
-    b = np.array(b)
-    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
-
-
-def sanitize_to_ascii(text: str) -> str:
-    """Convert text to ASCII-safe string by removing or replacing non-ASCII characters."""
-    # Normalize unicode characters to their closest ASCII equivalents
-    text = unicodedata.normalize('NFKD', text)
-    # Encode to ASCII, ignoring characters that can't be converted
-    text = text.encode('ascii', 'ignore').decode('ascii')
-    # Replace any remaining problematic characters with underscores
-    text = re.sub(r'[^a-zA-Z0-9\-_.]', '_', text)
-    return text
-
-# Helper function to estimate token count
-def estimate_tokens(text: str) -> int:
-    """Estimate tokens as word_count / 1.33"""
-    word_count = len(text.split()) + 1
-    return int(word_count / 1.33)
-
-def _split_text_to_fit_limit(text: str, max_chars: int = MAX_CHUNK_CHAR_LENGTH) -> List[str]:
-    """Split text into chunks that respect the max character budget."""
-    if len(text) <= max_chars:
-        return [text]
-
-    chunks: List[str] = []
-    remaining = text.strip()
-
-    while len(remaining) > max_chars:
-        # Prefer breaking on paragraph or sentence boundaries to preserve semantics
-        split_idx = max(
-            remaining.rfind("\n\n", 0, max_chars),
-            remaining.rfind("\n", 0, max_chars),
-            remaining.rfind(". ", 0, max_chars),
-            remaining.rfind(" ", 0, max_chars)
-        )
-
-        if split_idx == -1 or split_idx < int(max_chars * 0.4):
-            split_idx = max_chars
-
-        chunk = remaining[:split_idx].strip()
-        if chunk:
-            chunks.append(chunk)
-        remaining = remaining[split_idx:].strip()
-
-    if remaining:
-        chunks.append(remaining)
-
-    return chunks
-
-
-def _vector_to_payload(vector: Vector | Dict[str, Any]) -> Dict[str, Any]:
-    """Convert pinecone.Vector or dict into a JSON-serializable payload."""
-    if isinstance(vector, dict):
-        payload = {
-            "id": vector.get("id"),
-            "values": list(vector.get("values", [])),
-            "metadata": vector.get("metadata"),
-        }
-    else:
-        payload = {
-            "id": vector.id,
-            "values": list(vector.values),
-            "metadata": vector.metadata,
-        }
-    return payload
-
-
 def _estimate_payload_size(payload: Dict[str, Any]) -> int:
     """Approximate payload size in bytes by serializing it to JSON."""
     return len(json.dumps(payload, ensure_ascii=False))
-
-
-def _append_chunk(chunks: List[dict], doc_metadata: dict, safe_doc_name: str, text: str) -> None:
-    for piece in _split_text_to_fit_limit(text):
-        if not piece:
-            continue
-        chunks.append({
-            "chunk_id": f"{safe_doc_name}-{str(uuid.uuid4())}",
-            "page": doc_metadata["page"],
-            "text": piece,
-            "storage_path": doc_metadata["storage_path"]
-        })
-
-
-def _embed_paragraph(text: str) -> np.ndarray:
-    embedding = co.embed(
-        texts=[text],
-        model=embedding_model_name,
-        input_type="search_document",
-        embedding_types=["float"]
-    ).embeddings.float_[0]
-    return np.asarray(embedding, dtype=np.float32)
-
-
-def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.65, max_tokens: int = 1000, min_tokens: int = 150) -> list:
-    """
-    Split document content into semantically-merged chunks.
-    Chunks are split when:
-    - Token count is at least min_tokens (default 150) AND
-      (Similarity falls below max_similarity (default 0.65) OR token count exceeds max_tokens (default 1000))
-    Token count is estimated as word_count / 1.33
-    """
-    paragraphs = [p.strip() for p in content.split("\n\n") if p.strip()]
-    if not paragraphs:
-        return []
-    
-    chunks = []
-    current_chunk = paragraphs[0]
-    current_chunk_size = 1
-    
-    # Sanitize doc name for ASCII-only IDs
-    safe_doc_name = sanitize_to_ascii(doc_metadata['name'])
-    
-    # Get embedding for the first paragraph
-    current_embedding = _embed_paragraph(current_chunk)
-    
-    for i in range(1, len(paragraphs)):
-        para = paragraphs[i]
-        para_embedding = _embed_paragraph(para)
-        
-        sim = cosine_similarity(current_embedding, para_embedding)
-        
-        # Check if merging would exceed token limit
-        potential_chunk = current_chunk + "\n\n" + para
-        potential_tokens = estimate_tokens(potential_chunk)
-        current_tokens = estimate_tokens(current_chunk)
-        
-        # Decision logic:
-        # 1. If below min_tokens, always merge (unless exceeding max_tokens)
-        # 2. If at or above min_tokens, split if similarity is low OR max_tokens would be exceeded
-        should_merge = False
-        if current_tokens < min_tokens:
-            # Below minimum, keep merging unless we'd exceed max
-            should_merge = potential_tokens <= max_tokens
-        else:
-            # At or above minimum, apply similarity and max token checks
-            should_merge = sim >= max_similarity and potential_tokens <= max_tokens
-        
-        if should_merge:
-            # Merge with current chunk
-            current_chunk = potential_chunk
-            previous_count = current_chunk_size
-            current_chunk_size += 1
-            # Update current embedding as the mean of embeddings
-            current_embedding = (current_embedding * previous_count + para_embedding) / current_chunk_size
-        else:
-            # Save current chunk (split due to low similarity or token limit exceeded)
-            _append_chunk(chunks, doc_metadata, safe_doc_name, current_chunk)
-            # Start new chunk
-            current_chunk = para
-            current_chunk_size = 1
-            current_embedding = para_embedding
-    
-    # Add last chunk
-    _append_chunk(chunks, doc_metadata, safe_doc_name, current_chunk)
-    
-    return chunks
 
 
 class EmbedRequest(BaseModel):
@@ -225,77 +63,132 @@ class EmbedRequest(BaseModel):
     overwrite: bool = True
 
 
-class UpsertRequest(BaseModel):
-    index_name: str
-    namespace: str | None = None
-    vectors: list
+def _ensure_index(index_name: str):
+    """Create index if it doesn't exist and return an Index handle."""
+    if not pc.has_index(index_name):
+        logger.info(f"Creating index {index_name}")
+        from pinecone import ServerlessSpec
+        pc.create_index(
+            name=index_name,
+            dimension=1536,  # Cohere embed-v4.0 dimension
+            metric="cosine",
+            spec=ServerlessSpec(
+                cloud="aws",
+                region="us-east-1"
+            )
+        )
+    return pc.Index(name=index_name)
 
 
-def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
-    """Embed a single stored document and prepare vectors for upsert."""
-    
+def _upsert_vectors_batch(index, vectors: List[Dict[str, Any]], namespace: str | None) -> int:
+    """Upsert a list of dict-vectors to Pinecone, respecting payload size limits.
+
+    Returns the number of upserted vectors.
+    """
+    if not vectors:
+        return 0
+
+    batches: List[List[Dict[str, Any]]] = []
+    current_batch: List[Dict[str, Any]] = []
+    current_batch_bytes = 0
+
+    for payload in vectors:
+        payload_size = _estimate_payload_size(payload)
+
+        if payload_size > PINECONE_SAFE_REQUEST_BYTES:
+            logger.warning(
+                "Vector %s (~%d bytes) exceeds safe payload size; sending as single-vector batch",
+                payload.get("id"),
+                payload_size,
+            )
+            if current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_batch_bytes = 0
+            batches.append([payload])
+            continue
+
+        if current_batch and current_batch_bytes + payload_size > PINECONE_SAFE_REQUEST_BYTES:
+            batches.append(current_batch)
+            current_batch = []
+            current_batch_bytes = 0
+
+        current_batch.append(payload)
+        current_batch_bytes += payload_size
+
+    if current_batch:
+        batches.append(current_batch)
+
+    total_upserted = 0
+    for idx, batch in enumerate(batches, start=1):
+        upsert_response = index.upsert(vectors=batch, namespace=namespace)
+        if hasattr(upsert_response, "upserted_count"):
+            total_upserted += upsert_response.upserted_count
+        elif isinstance(upsert_response, dict) and "upserted_count" in upsert_response:
+            total_upserted += upsert_response["upserted_count"]
+        else:
+            total_upserted += len(batch)
+
+    return total_upserted
+
+
+def _embed_and_upsert_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
+    """Embed a document and upsert vectors in streaming sub-batches.
+
+    Unlike the two-step ``_embed_doc`` + ``_upsert_to_vector_store`` flow,
+    this function embeds and upserts in batches of 96 chunks so that peak
+    memory stays bounded.  Essential for large documents (700+ page PDFs)
+    where holding all vectors at once can exceed the container memory limit.
+    """
+
     storage_path = embed_request.storage_path
-    
+
     if not storage_path:
         raise ValueError("storage_path is required to embed a document")
-    
+
     if embed_request.library not in ["organization", "private", "public"]:
         raise ValueError("library must be 'organization', 'private', or 'public'")
 
     if embed_request.library == "private" and not embed_request.user_id:
         raise ValueError("user_id is required for private library")
-    
-    # For batch embedding of public documents:
-    # - Bucket name comes from the request (e.g., "loomy-public-documents")
-    # - Index is always "public"
-    # - No namespace used
+
     bucket_name = embed_request.bucket_name
     index_name = "public"
     namespace = None
-    
+
     bucket = storage_client.get_bucket(bucket_name)
     blob = bucket.blob(storage_path)
-    
+
     if not blob.exists():
         return {
             "status": "error",
             "message": f"Document {storage_path} not found in bucket {bucket_name}",
             "chunks": 0,
-            "vectors": [],
-            "index_name": index_name,
-            "namespace": namespace,
+            "upserted": 0,
         }
-    
-    # Note: Existence check removed - batch_embedder pre-filters via get_existing_storage_paths()
-    
+
+    # Delete existing vectors when overwriting
     if pc.has_index(index_name) and embed_request.overwrite:
         try:
-            index = pc.Index(name=index_name)
-            index.delete(filter={"storage_path": {"$eq": storage_path}})
+            idx = pc.Index(name=index_name)
+            idx.delete(filter={"storage_path": {"$eq": storage_path}})
         except Exception as e:
             logger.warning(f"Unable to delete existing vectors for {storage_path}: {e}")
-    
+
     file_bytes = blob.download_as_bytes()
     content_type = (
         embed_request.content_type
         or blob.content_type
         or mimetypes.guess_type(storage_path)[0]
     )
-    
+
     doc_name = storage_path.split("/")[-1]
-    
+
     try:
         processor = get_document_processor(content_type, storage_path)
     except ValueError as exc:
-        return {
-            "status": "error",
-            "message": str(exc),
-            "chunks": 0,
-            "vectors": [],
-            "index_name": index_name,
-            "namespace": namespace,
-        }
-    
+        return {"status": "error", "message": str(exc), "chunks": 0, "upserted": 0}
+
     try:
         chunks = processor.process(
             file_bytes,
@@ -304,167 +197,74 @@ def _embed_doc(embed_request: EmbedRequest) -> Dict[str, Any]:
             doc_name=doc_name,
         )
     except ValueError as e:
-        # CID corruption detected - skip this document
         logger.warning(f"Skipping document {storage_path}: {e}")
-        return {
-            "status": "skipped",
-            "message": f"Document skipped: {str(e)}",
-            "chunks": 0,
-            "vectors": [],
-            "index_name": index_name,
-            "namespace": namespace,
-        }
-    
-    # Free up memory immediately after processing
+        return {"status": "skipped", "message": str(e), "chunks": 0, "upserted": 0}
+
+    # Free heavy objects immediately
     del file_bytes
     del processor
-    
+    gc.collect()
+
     if not chunks:
-        return {
-            "status": "error",
-            "message": "No chunks generated",
-            "chunks": 0,
-            "vectors": [],
-            "index_name": index_name,
-            "namespace": namespace,
-        }
-    
-    texts = [chunk["text"] for chunk in chunks]
-    
-    # Cohere embed API has a limit of 96 texts per call split into batches if needed
+        return {"status": "error", "message": "No chunks generated", "chunks": 0, "upserted": 0}
+
+    # ------- streaming embed + upsert in sub-batches -------
+    index = _ensure_index(index_name)
     batch_size = 96
-    embeddings = []
-    
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i:i + batch_size]
+    total_chunks = len(chunks)
+    total_upserted = 0
+
+    for batch_start in range(0, total_chunks, batch_size):
+        batch_chunks = chunks[batch_start : batch_start + batch_size]
+        texts = [c["text"] for c in batch_chunks]
+
+        # Embed this sub-batch
         batch_embeddings = co.embed(
-            texts=batch,
+            texts=texts,
             model=embedding_model_name,
             input_type="search_document",
-            embedding_types=["float"]
+            embedding_types=["float"],
         ).embeddings.float_
-        embeddings.extend(batch_embeddings)
-    
-    # Free up memory after embedding
-    del texts
-    
-    vectors = [
-        Vector(
-            id=chunk["chunk_id"],
-            values=embedding,
-            metadata={
-                "page": chunk["page"],
-                "chunk_text": chunk["text"],
-                "storage_path": storage_path,
-                "doc_name": doc_name,
-                "library": embed_request.library,
-                "source": storage_path.split("/")[0],
+
+        del texts
+
+        # Build lightweight dict vectors (skip Pinecone Vector objects)
+        dict_vectors = [
+            {
+                "id": chunk["chunk_id"],
+                "values": list(embedding),
+                "metadata": {
+                    "page": chunk["page"],
+                    "chunk_text": chunk["text"],
+                    "storage_path": storage_path,
+                    "doc_name": doc_name,
+                    "library": embed_request.library,
+                    "source": storage_path.split("/")[0],
+                },
             }
+            for chunk, embedding in zip(batch_chunks, batch_embeddings)
+        ]
+
+        del batch_embeddings
+
+        # Upsert immediately and free
+        total_upserted += _upsert_vectors_batch(index, dict_vectors, namespace)
+
+        del dict_vectors
+
+        logger.debug(
+            "  Sub-batch %d–%d / %d embedded & upserted",
+            batch_start + 1,
+            min(batch_start + batch_size, total_chunks),
+            total_chunks,
         )
-        for chunk, embedding in zip(chunks, embeddings)
-    ]
-    
-    # Store counts before deleting
-    num_chunks = len(chunks)
-    
-    # Free up memory after creating vectors
+
+    # Free the full chunks list and force GC
     del chunks
-    del embeddings
-    gc.collect()  # Force garbage collection
-    
+    gc.collect()
+
     return {
         "status": "success",
-        "chunks": num_chunks,
-        "vectors": vectors,
-        "index_name": index_name,
-        "namespace": namespace,
+        "chunks": total_chunks,
+        "upserted": total_upserted,
     }
-
-
-def _upsert_to_vector_store(upsert_request: UpsertRequest) -> Dict[str, Any]:
-    """Upsert vectors to Pinecone."""
-    
-    try:
-        # Create index if it doesn't exist
-        if not pc.has_index(upsert_request.index_name):
-            logger.info(f"Creating index {upsert_request.index_name}")
-            from pinecone import ServerlessSpec
-            pc.create_index(
-                name=upsert_request.index_name,
-                dimension=1536,  # Cohere embed-v4.0 dimension
-                metric="cosine",
-                spec=ServerlessSpec(
-                    cloud="aws",
-                    region="us-east-1"
-                )
-            )
-        
-        index = pc.Index(name=upsert_request.index_name)
-        if not upsert_request.vectors:
-            return {"status": "success", "upserted": 0}
-
-        serialized_vectors = []
-        for vector in upsert_request.vectors:
-            payload = _vector_to_payload(vector)
-            payload_size = _estimate_payload_size(payload)
-            serialized_vectors.append((payload, payload_size))
-
-        batches: List[List[Dict[str, Any]]] = []
-        current_batch: List[Dict[str, Any]] = []
-        current_batch_bytes = 0
-
-        for payload, payload_size in serialized_vectors:
-            if payload_size > PINECONE_SAFE_REQUEST_BYTES:
-                logger.warning(
-                    "Vector %s (~%d bytes) exceeds safe payload size; sending as single-vector batch",
-                    payload.get("id"),
-                    payload_size,
-                )
-                if current_batch:
-                    batches.append(current_batch)
-                    current_batch = []
-                    current_batch_bytes = 0
-                batches.append([payload])
-                continue
-
-            if current_batch and current_batch_bytes + payload_size > PINECONE_SAFE_REQUEST_BYTES:
-                batches.append(current_batch)
-                current_batch = []
-                current_batch_bytes = 0
-
-            current_batch.append(payload)
-            current_batch_bytes += payload_size
-
-        if current_batch:
-            batches.append(current_batch)
-
-        total_upserted = 0
-        for idx, batch in enumerate(batches, start=1):
-            approx_bytes = sum(_estimate_payload_size(vector) for vector in batch)
-            logger.debug(
-                "Upserting batch %d/%d (%d vectors, ~%d bytes) into %s",
-                idx,
-                len(batches),
-                len(batch),
-                approx_bytes,
-                upsert_request.index_name,
-            )
-            upsert_response = index.upsert(
-                vectors=batch,
-                namespace=upsert_request.namespace,
-            )
-            if hasattr(upsert_response, "upserted_count"):
-                total_upserted += upsert_response.upserted_count
-            elif isinstance(upsert_response, dict) and "upserted_count" in upsert_response:
-                total_upserted += upsert_response["upserted_count"]
-            else:
-                total_upserted += len(batch)
-
-        return {
-            "status": "success",
-            "upserted": total_upserted,
-        }
-        
-    except Exception as e:
-        logger.error(f"Error upserting to vector store: {e}")
-        return {"status": "error", "message": str(e)}
