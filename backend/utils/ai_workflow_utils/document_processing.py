@@ -516,9 +516,9 @@ class PDFDocumentProcessor(DocumentProcessor):
             total_pages = len(_pdf.pages)
 
         # Skip very large PDFs to avoid OOM
-        if total_pages > 500:
+        if total_pages > 400:
             logger.warning(
-                "[PDF] Skipping '%s': %d pages exceeds limit of 500 pages",
+                "[PDF] Skipping '%s': %d pages exceeds limit of 400 pages",
                 doc_name, total_pages,
             )
             return chunks
