@@ -405,6 +405,102 @@ class PDFDocumentProcessor(DocumentProcessor):
         
         return images
 
+    # Number of pages processed per pdfplumber context.
+    # After each batch the PDF object is closed, releasing all pdfminer internal
+    # caches (XRef tables, object streams, decoded content) that accumulate ~2-3 MB/page
+    # and cannot be freed any other way while the PDF context remains open.
+    _PAGE_BATCH_SIZE = 20
+
+    def _process_page(
+        self,
+        page,
+        page_number: int,
+        total_pages: int,
+        doc_name: str,
+        storage_path: str,
+        chunk_document: Chunker,
+    ) -> list[Chunk]:
+        """Process a single PDF page and return its chunks. Frees all per-page objects."""
+        page_chunks: list[Chunk] = []
+
+        page_text = page.extract_text() or ""
+
+        # Skip pages with CID corruption (symbolic fonts that can't be decoded)
+        if page_text.strip() and has_cid_corruption(page_text):
+            logger.warning(
+                "[PDF] Skipping page %d of '%s': CID encoding corruption detected",
+                page_number, doc_name,
+            )
+            del page_text
+            page.flush_cache()
+            gc.collect()
+            _log_memory(f"[PDF] page {page_number}/{total_pages} (CID skip) '{doc_name}'")
+            return page_chunks
+
+        # Extract and analyze images on this page
+        page_images = self._extract_page_images(page)
+        has_page_images = len(page_images) > 0
+        image_descriptions: List[str] = []
+
+        if page_images:
+            logger.info(
+                "[PDF] Found %d image(s) on page %d of '%s'",
+                len(page_images), page_number, doc_name,
+            )
+            if len(page_images) == 1:
+                description = self.analyze_image(
+                    page_images[0][0],
+                    page_images[0][1],
+                    context=f"Image from page {page_number} of PDF document '{doc_name}'",
+                )
+                if description:
+                    image_descriptions.append(description)
+            else:
+                description = self.analyze_multiple_images(
+                    page_images,
+                    context=f"Images from page {page_number} of PDF document '{doc_name}'",
+                )
+                if description:
+                    image_descriptions.append(description)
+
+        # Free image bytes immediately after analysis
+        del page_images
+
+        # Release pdfplumber's page-level cache
+        page.flush_cache()
+
+        # Combine text and image descriptions
+        combined_content_parts: List[str] = []
+
+        if page_text.strip():
+            combined_content_parts.append(page_text.strip())
+        del page_text
+
+        if image_descriptions:
+            combined_content_parts.append("\n[Image Content]\n" + "\n".join(image_descriptions))
+        del image_descriptions
+
+        if not combined_content_parts:
+            gc.collect()
+            _log_memory(f"[PDF] page {page_number}/{total_pages} (empty) '{doc_name}'")
+            return page_chunks
+
+        combined_text = "\n\n".join(combined_content_parts)
+        del combined_content_parts
+
+        doc_metadata = {
+            "name": doc_name,
+            "page": page_number,
+            "storage_path": storage_path,
+            "has_images": has_page_images,
+        }
+        page_chunks.extend(chunk_document(doc_metadata, combined_text))
+        del combined_text
+
+        gc.collect()
+        _log_memory(f"[PDF] page {page_number}/{total_pages} '{doc_name}'")
+        return page_chunks
+
     def process(
         self,
         file_bytes: bytes,
@@ -414,159 +510,106 @@ class PDFDocumentProcessor(DocumentProcessor):
         doc_name: str,
     ) -> list[Chunk]:
         chunks: list[Chunk] = []
-        
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            total_pages = len(pdf.pages)
-            
-            # Skip very large PDFs to avoid OOM
-            if total_pages > 500:
-                logger.warning(
-                    "[PDF] Skipping '%s': %d pages exceeds limit of 500 pages",
-                    doc_name, total_pages
-                )
-                return chunks
-            
-            # First pass: try normal text + embedded image extraction
-            for page_number, page in enumerate(pdf.pages, start=1):
-                page_text = page.extract_text() or ""
-                
-                # Skip pages with CID corruption (symbolic fonts that can't be decoded)
-                if page_text.strip() and has_cid_corruption(page_text):
-                    logger.warning("[PDF] Skipping page %d of '%s': CID encoding corruption detected", page_number, doc_name)
-                    del page_text
-                    page.flush_cache()
-                    gc.collect()
-                    _log_memory(f"[PDF] page {page_number}/{total_pages} (CID skip) '{doc_name}'")
-                    continue
-                
-                # Extract and analyze images on this page
-                page_images = self._extract_page_images(page)
-                has_page_images = len(page_images) > 0
-                image_descriptions: List[str] = []
-                
-                if page_images:
-                    logger.info("[PDF] Found %d image(s) on page %d of '%s'", len(page_images), page_number, doc_name)
-                    
-                    # Analyze images (batch if multiple)
-                    if len(page_images) == 1:
-                        description = self.analyze_image(
-                            page_images[0][0],
-                            page_images[0][1],
-                            context=f"Image from page {page_number} of PDF document '{doc_name}'"
-                        )
-                        if description:
-                            image_descriptions.append(description)
-                    else:
-                        description = self.analyze_multiple_images(
-                            page_images,
-                            context=f"Images from page {page_number} of PDF document '{doc_name}'"
-                        )
-                        if description:
-                            image_descriptions.append(description)
-                
-                # Free image bytes immediately after analysis to avoid accumulation over many pages
-                del page_images
-                
-                # Release pdfplumber's internal page cache (bitmaps, parsed objects, etc.)
-                page.flush_cache()
-                
-                # Combine text and image descriptions
-                combined_content_parts: List[str] = []
-                
-                if page_text.strip():
-                    combined_content_parts.append(page_text.strip())
-                
-                # Free page text – no longer needed
-                del page_text
-                
-                if image_descriptions:
-                    combined_content_parts.append("\n[Image Content]\n" + "\n".join(image_descriptions))
-                
-                if not combined_content_parts:
-                    gc.collect()
-                    _log_memory(f"[PDF] page {page_number}/{total_pages} (skipped) '{doc_name}'")
-                    continue
-                
-                combined_text = "\n\n".join(combined_content_parts)
-                del combined_content_parts
-                
-                doc_metadata = {
-                    "name": doc_name,
-                    "page": page_number,
-                    "storage_path": storage_path,
-                    "has_images": has_page_images,
-                }
-                chunks.extend(chunk_document(doc_metadata, combined_text))
-                del combined_text
-                
-                # GC every page to keep working set bounded over long PDFs
-                gc.collect()
-                _log_memory(f"[PDF] page {page_number}/{total_pages} '{doc_name}'")
-            
-            # Fallback: if no chunks generated, treat entire pages as images (e.g., scanned PDFs)
-            if not chunks:
-                logger.info(
-                    "[PDF] No text/images extracted from '%s', using page-as-image fallback with Bedrock OCR",
-                    doc_name
-                )
-                
-                # Limit fallback to reasonable page count for Cloud Run
-                max_fallback_pages = min(total_pages, 15)
-                if total_pages > max_fallback_pages:
-                    logger.warning(
-                        "[PDF] Limiting fallback processing to first %d of %d pages",
-                        max_fallback_pages, total_pages
+
+        # Quick first open just to read the page count, then close immediately.
+        with pdfplumber.open(io.BytesIO(file_bytes)) as _pdf:
+            total_pages = len(_pdf.pages)
+
+        # Skip very large PDFs to avoid OOM
+        if total_pages > 500:
+            logger.warning(
+                "[PDF] Skipping '%s': %d pages exceeds limit of 500 pages",
+                doc_name, total_pages,
+            )
+            return chunks
+
+        # First pass: text + embedded-image extraction, processed in batches.
+        # Each batch opens a fresh pdfplumber (and thus pdfminer) context so that
+        # pdfminer's document-level caches (~2-3 MB/page) are fully released between
+        # batches rather than accumulating for the entire document.
+        for batch_start in range(0, total_pages, self._PAGE_BATCH_SIZE):
+            batch_end = min(batch_start + self._PAGE_BATCH_SIZE, total_pages)
+            logger.debug(
+                "[PDF] Opening batch pages %d-%d/%d of '%s'",
+                batch_start + 1, batch_end, total_pages, doc_name,
+            )
+
+            with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                for page_number in range(batch_start + 1, batch_end + 1):
+                    page = pdf.pages[page_number - 1]
+                    page_chunks = self._process_page(
+                        page, page_number, total_pages, doc_name, storage_path, chunk_document,
                     )
-                
-                for page_number, page in enumerate(pdf.pages[:max_fallback_pages], start=1):
-                    try:
-                        # Render page as image
-                        page_image = self._render_page_as_image(page)
-                        
-                        if not page_image:
-                            logger.warning("[PDF] Failed to render page %d as image", page_number)
-                            continue
-                        
-                        # Analyze the full page image with Bedrock
-                        image_bytes, image_format = page_image
-                        description = self.analyze_image(
-                            image_bytes,
-                            image_format,
-                            context=f"Full page {page_number} of scanned PDF document '{doc_name}'"
-                        )
-                        
-                        # Free memory immediately
-                        del image_bytes
-                        del page_image
-                        
-                        if not description or not description.strip():
-                            logger.debug("[PDF] No content extracted from page %d image", page_number)
-                            continue
-                        
-                        # Create chunks from the OCR'd text
-                        doc_metadata = {
-                            "name": doc_name,
-                            "page": page_number,
-                            "storage_path": storage_path,
-                            "has_images": True,
-                            "ocr_fallback": True,
-                        }
-                        chunks.extend(chunk_document(doc_metadata, description))
-                        
-                        # Periodic GC every 3 pages to manage memory on Cloud Run
-                        if page_number % 3 == 0:
-                            gc.collect()
-                            logger.debug("[PDF] GC after processing page %d", page_number)
-                            
-                    except Exception as e:
-                        logger.error("[PDF] Error processing page %d as image: %s", page_number, e)
-                        continue
-                
-                logger.info(
-                    "[PDF] Fallback complete: extracted %d chunks from %d pages of '%s'",
-                    len(chunks), max_fallback_pages, doc_name
+                    chunks.extend(page_chunks)
+            # pdfplumber context is now closed → entire pdfminer PDFDocument object
+            # is released; force a GC pass to reclaim it promptly.
+            gc.collect()
+            _log_memory(
+                f"[PDF] after batch {batch_start + 1}-{batch_end}/{total_pages} '{doc_name}'"
+            )
+
+        # Fallback: if no chunks generated, treat entire pages as images (e.g., scanned PDFs)
+        if not chunks:
+            logger.info(
+                "[PDF] No text/images extracted from '%s', using page-as-image fallback with Bedrock OCR",
+                doc_name,
+            )
+
+            max_fallback_pages = min(total_pages, 15)
+            if total_pages > max_fallback_pages:
+                logger.warning(
+                    "[PDF] Limiting fallback processing to first %d of %d pages",
+                    max_fallback_pages, total_pages,
                 )
-        
+
+            # Open one page at a time so pdfminer state never accumulates
+            for page_number in range(1, max_fallback_pages + 1):
+                try:
+                    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+                        page = pdf.pages[page_number - 1]
+                        page_image = self._render_page_as_image(page)
+                        page.flush_cache()
+
+                    # pdfminer context released here
+                    gc.collect()
+
+                    if not page_image:
+                        logger.warning("[PDF] Failed to render page %d as image", page_number)
+                        continue
+
+                    image_bytes, image_format = page_image
+                    description = self.analyze_image(
+                        image_bytes,
+                        image_format,
+                        context=f"Full page {page_number} of scanned PDF document '{doc_name}'",
+                    )
+                    del image_bytes
+                    del page_image
+
+                    if not description or not description.strip():
+                        logger.debug("[PDF] No content extracted from page %d image", page_number)
+                        continue
+
+                    doc_metadata = {
+                        "name": doc_name,
+                        "page": page_number,
+                        "storage_path": storage_path,
+                        "has_images": True,
+                        "ocr_fallback": True,
+                    }
+                    chunks.extend(chunk_document(doc_metadata, description))
+                    gc.collect()
+                    _log_memory(f"[PDF] fallback page {page_number}/{max_fallback_pages} '{doc_name}'")
+
+                except Exception as e:
+                    logger.error("[PDF] Error processing page %d as image: %s", page_number, e)
+                    continue
+
+            logger.info(
+                "[PDF] Fallback complete: extracted %d chunks from %d pages of '%s'",
+                len(chunks), max_fallback_pages, doc_name,
+            )
+
         return chunks
 
 
