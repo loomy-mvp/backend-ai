@@ -12,6 +12,7 @@ import base64
 import gc
 import io
 import logging
+import os
 import time
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
@@ -20,6 +21,7 @@ from typing import Callable, Dict, List, Optional, Tuple, Type
 
 import boto3
 import pdfplumber
+import psutil
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from docx import Document as DocxDocument
@@ -38,6 +40,18 @@ from backend.config.document_processing_config import (
 from backend.config.prompts import IMAGE_ANALYSIS_PROMPT
 
 logger = logging.getLogger(__name__)
+
+_process = psutil.Process(os.getpid())
+
+
+def _log_memory(tag: str) -> None:
+    """Log current process RSS memory at INFO level."""
+    try:
+        rss_mb = _process.memory_info().rss / (1024 * 1024)
+        logger.info("[MEM] %s: RSS=%.1f MB", tag, rss_mb)
+    except Exception:
+        pass
+
 
 Chunk = Dict[str, object]
 Chunker = Callable[[Dict[str, object], str], list[Chunk]]
@@ -239,7 +253,7 @@ class DocumentProcessor(ABC):
                         response_text += block["text"]
 
                 # Log the full response text
-                logger.info("Image analysis response text: %s", response_text)
+                # logger.info("Image analysis response text: %s", response_text)
 
                 # Log token usage
                 usage = response.get("usage", {})
@@ -368,14 +382,20 @@ class PDFDocumentProcessor(DocumentProcessor):
                     # Crop the page to the image region and convert to PIL Image
                     cropped = page.crop((x0, top, x1, bottom))
                     pil_image = cropped.to_image(resolution=150).original
+                    # Free the cropped page object immediately
+                    cropped.flush_cache()
+                    del cropped
                     
                     # Convert to PNG bytes
                     img_buffer = io.BytesIO()
                     pil_image.save(img_buffer, format="PNG")
+                    del pil_image
                     image_bytes = img_buffer.getvalue()
+                    del img_buffer
                     
                     if image_bytes and len(image_bytes) > 100:  # Skip tiny/empty images
                         images.append((image_bytes, "png"))
+                    del image_bytes
                         
                 except Exception as e:
                     logger.debug("Failed to extract image from PDF page: %s", e)
@@ -415,6 +435,8 @@ class PDFDocumentProcessor(DocumentProcessor):
                     logger.warning("[PDF] Skipping page %d of '%s': CID encoding corruption detected", page_number, doc_name)
                     del page_text
                     page.flush_cache()
+                    gc.collect()
+                    _log_memory(f"[PDF] page {page_number}/{total_pages} (CID skip) '{doc_name}'")
                     continue
                 
                 # Extract and analyze images on this page
@@ -461,10 +483,8 @@ class PDFDocumentProcessor(DocumentProcessor):
                     combined_content_parts.append("\n[Image Content]\n" + "\n".join(image_descriptions))
                 
                 if not combined_content_parts:
-                    # Still run periodic GC even when skipping empty pages
-                    if page_number % 5 == 0:
-                        gc.collect()
-                        logger.debug("[PDF] GC after page %d", page_number)
+                    gc.collect()
+                    _log_memory(f"[PDF] page {page_number}/{total_pages} (skipped) '{doc_name}'")
                     continue
                 
                 combined_text = "\n\n".join(combined_content_parts)
@@ -479,10 +499,9 @@ class PDFDocumentProcessor(DocumentProcessor):
                 chunks.extend(chunk_document(doc_metadata, combined_text))
                 del combined_text
                 
-                # Periodic GC every 5 pages to release unreferenced buffers
-                if page_number % 5 == 0:
-                    gc.collect()
-                    logger.debug("[PDF] GC after processing page %d", page_number)
+                # GC every page to keep working set bounded over long PDFs
+                gc.collect()
+                _log_memory(f"[PDF] page {page_number}/{total_pages} '{doc_name}'")
             
             # Fallback: if no chunks generated, treat entire pages as images (e.g., scanned PDFs)
             if not chunks:
