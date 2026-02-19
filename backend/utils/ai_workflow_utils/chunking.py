@@ -8,6 +8,7 @@ import uuid
 import numpy as np
 import cohere
 import os
+import unicodedata
 
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.config.chatbot_config import EMBEDDING_CONFIG
@@ -18,6 +19,29 @@ logger = logging.getLogger(__name__)
 cohere_api_key = os.getenv("COHERE_API_KEY")
 co = cohere.ClientV2(cohere_api_key)
 embedding_model_name = get_config_value(config_set=EMBEDDING_CONFIG, key="model")
+
+
+def make_ascii_safe(text: str) -> str:
+    """Convert text to ASCII-safe format for use in Pinecone vector IDs.
+    
+    Pinecone requires vector IDs to be ASCII only. This function:
+    1. Normalizes Unicode characters (NFD decomposition)
+    2. Removes combining marks (accents, diacritics)
+    3. Encodes to ASCII with error handling
+    
+    Example:
+        "dell'irregolare" -> "dell'irregolare" (apostrophe normalized)
+        "Café" -> "Cafe"
+    """
+    # Normalize Unicode to decomposed form (NFD)
+    normalized = unicodedata.normalize('NFD', text)
+    # Remove combining marks and encode to ASCII
+    ascii_text = ''.join(
+        char for char in normalized
+        if unicodedata.category(char) != 'Mn'  # Mn = Mark, nonspacing (accents)
+    )
+    # Encode to ASCII, replacing any remaining non-ASCII chars
+    return ascii_text.encode('ascii', errors='replace').decode('ascii')
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -65,7 +89,7 @@ def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.7
             else:
                 # Save current chunk if it meets minimum size
                 if estimate_tokens(current_chunk) >= min_tokens:
-                    chunk_id = f"{doc_metadata['name']}-{str(uuid.uuid4())}"
+                    chunk_id = f"{make_ascii_safe(doc_metadata['name'])}-{str(uuid.uuid4())}"
                     chunks.append({
                         "chunk_id": chunk_id[:512],
                         "page": doc_metadata["page"],
@@ -79,7 +103,7 @@ def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.7
         
         # Add last chunk
         if current_chunk:
-            chunk_id = f"{doc_metadata['name']}-{str(uuid.uuid4())}"
+            chunk_id = f"{make_ascii_safe(doc_metadata['name'])}-{str(uuid.uuid4())}"
             chunks.append({
                 "chunk_id": chunk_id[:512],
                 "page": doc_metadata["page"],
@@ -91,7 +115,7 @@ def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.7
     
     # If only one paragraph, return it directly without embedding (will be embedded later in _embed_doc)
     if len(paragraphs) == 1:
-        chunk_id = f"{doc_metadata['name']}-{str(uuid.uuid4())}"
+        chunk_id = f"{make_ascii_safe(doc_metadata['name'])}-{str(uuid.uuid4())}"
         return [{
             "chunk_id": chunk_id[:512],
             "page": doc_metadata["page"],
@@ -150,7 +174,7 @@ def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.7
             current_embedding = (current_embedding * len(current_chunk_texts) + para_embedding) / (len(current_chunk_texts) + 1)
         else:
             # Save current chunk (split due to low similarity or token limit exceeded)
-            chunk_id = f"{doc_metadata['name']}-{str(uuid.uuid4())}"
+            chunk_id = f"{make_ascii_safe(doc_metadata['name'])}-{str(uuid.uuid4())}"
             chunks.append({
                 "chunk_id": chunk_id[:512],
                 "page": doc_metadata["page"],
@@ -167,7 +191,7 @@ def chunk_document(doc_metadata: dict, content: str, max_similarity: float = 0.7
         del potential_chunk
     
     # Add last chunk
-    chunk_id = f"{doc_metadata['name']}-{str(uuid.uuid4())}"
+    chunk_id = f"{make_ascii_safe(doc_metadata['name'])}-{str(uuid.uuid4())}"
     chunks.append({
         "chunk_id": chunk_id[:512],
         "page": doc_metadata["page"],

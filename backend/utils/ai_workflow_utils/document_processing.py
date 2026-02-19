@@ -9,6 +9,7 @@ components (e.g., embeddings, vector stores) can consume.
 from __future__ import annotations
 
 import base64
+import gc
 import io
 import logging
 import time
@@ -283,7 +284,57 @@ class PDFDocumentProcessor(DocumentProcessor):
     
     Skips pages with CID encoding corruption (symbolic fonts).
     Extracts and analyzes images using Bedrock vision model.
+    Falls back to page-as-image OCR when no text is extractable.
     """
+
+    def _render_page_as_image(self, page) -> Optional[Tuple[bytes, str]]:
+        """Render an entire PDF page as a PNG image for OCR/analysis.
+        
+        Used as fallback when text extraction fails (e.g., scanned PDFs).
+        Optimized for Cloud Run with memory management and size limits.
+        
+        Args:
+            page: A pdfplumber page object
+            
+        Returns:
+            Tuple of (image_bytes, format) or None if rendering fails
+        """
+        try:
+            # Render the page at 150 DPI (good balance of quality and size for Cloud Run)
+            pil_image = page.to_image(resolution=150).original
+            
+            # Convert to PNG bytes
+            img_buffer = io.BytesIO()
+            pil_image.save(img_buffer, format="PNG")
+            image_bytes = img_buffer.getvalue()
+            
+            # Clean up immediately to free memory
+            del pil_image
+            del img_buffer
+            
+            # Check size and retry at lower resolution if needed
+            if len(image_bytes) > MAX_IMAGE_SIZE_BYTES:
+                logger.warning(
+                    "Rendered page exceeds max size (%d > %d), trying lower resolution",
+                    len(image_bytes),
+                    MAX_IMAGE_SIZE_BYTES
+                )
+                # Try again at 100 DPI
+                pil_image = page.to_image(resolution=100).original
+                img_buffer = io.BytesIO()
+                pil_image.save(img_buffer, format="PNG")
+                image_bytes = img_buffer.getvalue()
+                del pil_image
+                del img_buffer
+                
+                if len(image_bytes) > MAX_IMAGE_SIZE_BYTES:
+                    logger.warning("Page still too large at 100 DPI, skipping")
+                    return None
+            
+            return (image_bytes, "png")
+        except Exception as e:
+            logger.debug("Failed to render PDF page as image: %s", e)
+            return None
 
     def _extract_page_images(self, page) -> List[Tuple[bytes, str]]:
         """Extract all images from a PDF page.
@@ -348,23 +399,27 @@ class PDFDocumentProcessor(DocumentProcessor):
             total_pages = len(pdf.pages)
             
             # Skip very large PDFs to avoid OOM
-            if total_pages > 700:
+            if total_pages > 500:
                 logger.warning(
-                    "[PDF] Skipping '%s': %d pages exceeds limit of 700 pages",
+                    "[PDF] Skipping '%s': %d pages exceeds limit of 500 pages",
                     doc_name, total_pages
                 )
                 return chunks
             
+            # First pass: try normal text + embedded image extraction
             for page_number, page in enumerate(pdf.pages, start=1):
                 page_text = page.extract_text() or ""
                 
                 # Skip pages with CID corruption (symbolic fonts that can't be decoded)
                 if page_text.strip() and has_cid_corruption(page_text):
                     logger.warning("[PDF] Skipping page %d of '%s': CID encoding corruption detected", page_number, doc_name)
+                    del page_text
+                    page.flush_cache()
                     continue
                 
                 # Extract and analyze images on this page
                 page_images = self._extract_page_images(page)
+                has_page_images = len(page_images) > 0
                 image_descriptions: List[str] = []
                 
                 if page_images:
@@ -387,27 +442,112 @@ class PDFDocumentProcessor(DocumentProcessor):
                         if description:
                             image_descriptions.append(description)
                 
+                # Free image bytes immediately after analysis to avoid accumulation over many pages
+                del page_images
+                
+                # Release pdfplumber's internal page cache (bitmaps, parsed objects, etc.)
+                page.flush_cache()
+                
                 # Combine text and image descriptions
                 combined_content_parts: List[str] = []
                 
                 if page_text.strip():
                     combined_content_parts.append(page_text.strip())
                 
+                # Free page text – no longer needed
+                del page_text
+                
                 if image_descriptions:
                     combined_content_parts.append("\n[Image Content]\n" + "\n".join(image_descriptions))
                 
                 if not combined_content_parts:
+                    # Still run periodic GC even when skipping empty pages
+                    if page_number % 5 == 0:
+                        gc.collect()
+                        logger.debug("[PDF] GC after page %d", page_number)
                     continue
                 
                 combined_text = "\n\n".join(combined_content_parts)
+                del combined_content_parts
                 
                 doc_metadata = {
                     "name": doc_name,
                     "page": page_number,
                     "storage_path": storage_path,
-                    "has_images": len(page_images) > 0,
+                    "has_images": has_page_images,
                 }
                 chunks.extend(chunk_document(doc_metadata, combined_text))
+                del combined_text
+                
+                # Periodic GC every 5 pages to release unreferenced buffers
+                if page_number % 5 == 0:
+                    gc.collect()
+                    logger.debug("[PDF] GC after processing page %d", page_number)
+            
+            # Fallback: if no chunks generated, treat entire pages as images (e.g., scanned PDFs)
+            if not chunks:
+                logger.info(
+                    "[PDF] No text/images extracted from '%s', using page-as-image fallback with Bedrock OCR",
+                    doc_name
+                )
+                
+                # Limit fallback to reasonable page count for Cloud Run
+                max_fallback_pages = min(total_pages, 15)
+                if total_pages > max_fallback_pages:
+                    logger.warning(
+                        "[PDF] Limiting fallback processing to first %d of %d pages",
+                        max_fallback_pages, total_pages
+                    )
+                
+                for page_number, page in enumerate(pdf.pages[:max_fallback_pages], start=1):
+                    try:
+                        # Render page as image
+                        page_image = self._render_page_as_image(page)
+                        
+                        if not page_image:
+                            logger.warning("[PDF] Failed to render page %d as image", page_number)
+                            continue
+                        
+                        # Analyze the full page image with Bedrock
+                        image_bytes, image_format = page_image
+                        description = self.analyze_image(
+                            image_bytes,
+                            image_format,
+                            context=f"Full page {page_number} of scanned PDF document '{doc_name}'"
+                        )
+                        
+                        # Free memory immediately
+                        del image_bytes
+                        del page_image
+                        
+                        if not description or not description.strip():
+                            logger.debug("[PDF] No content extracted from page %d image", page_number)
+                            continue
+                        
+                        # Create chunks from the OCR'd text
+                        doc_metadata = {
+                            "name": doc_name,
+                            "page": page_number,
+                            "storage_path": storage_path,
+                            "has_images": True,
+                            "ocr_fallback": True,
+                        }
+                        chunks.extend(chunk_document(doc_metadata, description))
+                        
+                        # Periodic GC every 3 pages to manage memory on Cloud Run
+                        if page_number % 3 == 0:
+                            gc.collect()
+                            logger.debug("[PDF] GC after processing page %d", page_number)
+                            
+                    except Exception as e:
+                        logger.error("[PDF] Error processing page %d as image: %s", page_number, e)
+                        continue
+                
+                logger.info(
+                    "[PDF] Fallback complete: extracted %d chunks from %d pages of '%s'",
+                    len(chunks), max_fallback_pages, doc_name
+                )
+        
         return chunks
 
 
