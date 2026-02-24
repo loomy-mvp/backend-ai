@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import gc
+import hashlib
 import io
 import logging
 import os
@@ -81,6 +82,27 @@ class DocumentProcessor(ABC):
     """
 
     _bedrock_client = None
+
+    @staticmethod
+    def _deduplicate_images(
+        images: List[Tuple[bytes, str]],
+        seen_hashes: set,
+    ) -> List[Tuple[bytes, str]]:
+        """Return only images not already in seen_hashes, updating seen_hashes in-place.
+
+        Uses MD5 as a fast content fingerprint to skip identical pixel data
+        appearing multiple times within the same document (e.g. a company logo
+        repeated on every page).
+        """
+        unique: List[Tuple[bytes, str]] = []
+        for image_bytes, image_format in images:
+            h = hashlib.md5(image_bytes).hexdigest()
+            if h in seen_hashes:
+                logger.debug("Skipping duplicate image (md5=%s)", h)
+            else:
+                seen_hashes.add(h)
+                unique.append((image_bytes, image_format))
+        return unique
 
     @classmethod
     def _get_bedrock_client(cls):
@@ -419,6 +441,7 @@ class PDFDocumentProcessor(DocumentProcessor):
         doc_name: str,
         storage_path: str,
         chunk_document: Chunker,
+        seen_image_hashes: set | None = None,
     ) -> list[Chunk]:
         """Process a single PDF page and return its chunks. Frees all per-page objects."""
         page_chunks: list[Chunk] = []
@@ -439,7 +462,9 @@ class PDFDocumentProcessor(DocumentProcessor):
 
         # Extract and analyze images on this page
         page_images = self._extract_page_images(page)
-        has_page_images = len(page_images) > 0
+        has_page_images = len(page_images) > 0  # true even if all are dupes
+        if seen_image_hashes is not None:
+            page_images = self._deduplicate_images(page_images, seen_image_hashes)
         image_descriptions: List[str] = []
 
         if page_images:
@@ -527,6 +552,7 @@ class PDFDocumentProcessor(DocumentProcessor):
         # Each batch opens a fresh pdfplumber (and thus pdfminer) context so that
         # pdfminer's document-level caches (~2-3 MB/page) are fully released between
         # batches rather than accumulating for the entire document.
+        seen_image_hashes: set = set()  # dedup repeated images (e.g. logos) across pages
         for batch_start in range(0, total_pages, self._PAGE_BATCH_SIZE):
             batch_end = min(batch_start + self._PAGE_BATCH_SIZE, total_pages)
             logger.debug(
@@ -539,6 +565,7 @@ class PDFDocumentProcessor(DocumentProcessor):
                     page = pdf.pages[page_number - 1]
                     page_chunks = self._process_page(
                         page, page_number, total_pages, doc_name, storage_path, chunk_document,
+                        seen_image_hashes=seen_image_hashes,
                     )
                     chunks.extend(page_chunks)
             # pdfplumber context is now closed → entire pdfminer PDFDocument object
@@ -780,10 +807,14 @@ class DocxDocumentProcessor(DocumentProcessor):
             if table_images:
                 all_images.extend(table_images)
         
+        # Deduplicate images (e.g. a company logo embedded in every paragraph header)
+        seen_image_hashes: set = set()
+        all_images = self._deduplicate_images(all_images, seen_image_hashes)
+
         # Analyze images if present
         image_descriptions: List[str] = []
         if all_images:
-            logger.info("[DOCX] Found %d image(s) in '%s'", len(all_images), doc_name)
+            logger.info("[DOCX] Found %d unique image(s) in '%s'", len(all_images), doc_name)
             
             if len(all_images) == 1:
                 description = self.analyze_image(
@@ -930,6 +961,7 @@ class XlsxDocumentProcessor(DocumentProcessor):
         
         # First, extract images from the workbook (separate pass)
         images_by_sheet = self._extract_images_from_workbook(file_bytes)
+        seen_image_hashes: set = set()  # dedup repeated images across sheets
         
         try:
             # data_only=True gets computed values instead of formulas
@@ -957,13 +989,15 @@ class XlsxDocumentProcessor(DocumentProcessor):
                     continue
                 
                 sheet_text = self._extract_sheet_text(sheet)
-                sheet_images = images_by_sheet.get(sheet_name, [])
-                
+                sheet_images = self._deduplicate_images(
+                    images_by_sheet.get(sheet_name, []), seen_image_hashes
+                )
+
                 # Analyze images if present
                 image_descriptions: List[str] = []
                 if sheet_images:
                     logger.info(
-                        "[XLSX] Found %d image(s) in sheet '%s' of '%s'",
+                        "[XLSX] Found %d unique image(s) in sheet '%s' of '%s'",
                         len(sheet_images), sheet_name, doc_name
                     )
                     
@@ -1141,7 +1175,8 @@ class PptxDocumentProcessor(DocumentProcessor):
         if not presentation.slides:
             logger.info("[PPTX] No slides found in '%s'", doc_name)
             return chunks
-        
+
+        seen_image_hashes: set = set()  # dedup repeated images across slides
         for slide_number, slide in enumerate(presentation.slides, start=1):
             slide_text_parts: List[str] = []
             slide_images: List[Tuple[bytes, str]] = []
@@ -1191,11 +1226,14 @@ class PptxDocumentProcessor(DocumentProcessor):
                     if text:
                         slide_text_parts.append(text)
             
+            # Deduplicate repeated images (e.g. logo on every slide)
+            slide_images = self._deduplicate_images(slide_images, seen_image_hashes)
+
             # Analyze images if present
             image_descriptions: List[str] = []
             if slide_images:
                 logger.info(
-                    "[PPTX] Found %d image(s) on slide %d of '%s'",
+                    "[PPTX] Found %d unique image(s) on slide %d of '%s'",
                     len(slide_images), slide_number, doc_name
                 )
                 
