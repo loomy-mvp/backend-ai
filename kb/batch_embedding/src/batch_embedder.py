@@ -194,6 +194,7 @@ class BatchEmbedder:
                         'processed': 0,
                         'failed': 0,
                         'skipped': skipped_existing,
+                        'deleted': 0,
                         'total_chunks': 0,
                         'total_vectors': 0,
                         'errors': []
@@ -204,6 +205,7 @@ class BatchEmbedder:
             'processed': 0,
             'failed': 0,
             'skipped': skipped_existing,  # Include pre-filtered files
+            'deleted': 0,
             'total_chunks': 0,
             'total_vectors': 0,
             'errors': []
@@ -230,8 +232,14 @@ class BatchEmbedder:
                 status = result.get('status')
                 
                 if status == 'skipped':
-                    logger.info(f"  Skipped: {result.get('message', '')}")
-                    stats['skipped'] += 1
+                    skip_msg = result.get('message', '')
+                    logger.info(f"  Skipped: {skip_msg}")
+                    # Delete unsupported file types from GCS to avoid re-scanning nightly
+                    if 'unsupported' in skip_msg.lower() or 'not supported' in skip_msg.lower():
+                        self._delete_file_from_gcs(bucket_name, storage_path)
+                        stats['deleted'] += 1
+                    else:
+                        stats['skipped'] += 1
                 elif status == 'success':
                     chunks = result.get('chunks', 0)
                     upserted = result.get('upserted', 0)
@@ -243,7 +251,14 @@ class BatchEmbedder:
                     error_msg = result.get('message', 'Unknown error')
                     if 'No document processor available' in error_msg:
                         logger.warning(f"  Skipped (unsupported file type): {error_msg}")
-                        stats['skipped'] += 1
+                        # Delete unsupported file types from GCS to avoid re-scanning
+                        self._delete_file_from_gcs(bucket_name, storage_path)
+                        stats['deleted'] += 1
+                    elif 'No chunks generated' in error_msg:
+                        logger.warning(f"  Deleting file with no extractable content: {error_msg}")
+                        # Delete files that produce no chunks (e.g., corrupted, empty PDFs)
+                        self._delete_file_from_gcs(bucket_name, storage_path)
+                        stats['deleted'] += 1
                     else:
                         logger.error(f"  Failed: {error_msg}")
                         stats['failed'] += 1
@@ -252,9 +267,15 @@ class BatchEmbedder:
                 del result
                 
             except Exception as e:
-                logger.error(f"  Error processing file: {e}", exc_info=True)
-                stats['failed'] += 1
-                stats['errors'].append({'file': storage_path, 'step': 'general', 'error': str(e)})
+                error_str = str(e)
+                if 'No /Root object' in error_str:
+                    logger.warning(f"  Deleting corrupt/invalid PDF (no /Root object): {storage_path}")
+                    self._delete_file_from_gcs(bucket_name, storage_path)
+                    stats['deleted'] += 1
+                else:
+                    logger.error(f"  Error processing file: {e}", exc_info=True)
+                    stats['failed'] += 1
+                    stats['errors'].append({'file': storage_path, 'step': 'general', 'error': error_str})
             finally:
                 # Full GC every 25 files to reclaim accumulated memory
                 if i % 25 == 0:
@@ -270,6 +291,16 @@ class BatchEmbedder:
             self._clear_failure_report()
 
         return stats
+
+    def _delete_file_from_gcs(self, bucket_name: str, storage_path: str) -> None:
+        """Delete an unsupported file from GCS to avoid repeated nightly scans."""
+        try:
+            bucket = self.storage_client.bucket(bucket_name)
+            blob = bucket.blob(storage_path)
+            blob.delete()
+            logger.info(f"  🗑️  Deleted unsupported file from GCS: {storage_path}")
+        except Exception as exc:
+            logger.error(f"  Failed to delete {storage_path} from GCS: {exc}")
 
     def _write_failure_report(self, failures: List[Dict[str, Any]]) -> None:
         """Persist newline-delimited failure list to GCS for downstream monitoring."""

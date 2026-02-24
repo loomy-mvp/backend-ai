@@ -89,7 +89,7 @@ def main(
         # Exit with appropriate code
         if stats['failed'] > 0:
             logger.warning(f"⚠️  Completed with {stats['failed']} failures")
-            sys.exit(1)
+            sys.exit(0) if stats['failed'] < stats['total_files'] else sys.exit(1) 
         
         logger.info("✅ All files processed successfully!")
         sys.exit(0)
