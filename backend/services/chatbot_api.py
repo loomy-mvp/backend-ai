@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, BackgroundTasks
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import List, Optional, Literal
 import httpx
@@ -48,6 +48,7 @@ from backend.utils.ai_workflow_utils.attachment_processing import (
     AttachmentProcessingError,
 )
 from backend.utils.email_notification import send_error_email
+from backend.services.task_queue import enqueue_chat_task
 from langchain_core.messages import HumanMessage
 
 # Retrieval judge
@@ -320,7 +321,6 @@ async def process_chat_request(chat_data: dict):
 # API Endpoints
 @chatbot_router.post("/chat", response_model=ChatResponse)
 async def chat(
-    background_tasks: BackgroundTasks,
     request: ChatRequest
 ):
     """
@@ -425,8 +425,8 @@ async def chat(
         "tone_of_voice": request.tone_of_voice
     }
     
-    # Add chat processing to background tasks
-    background_tasks.add_task(process_chat_request, chat_data)
+    # Enqueue chat processing via Google Cloud Tasks
+    enqueue_chat_task(chat_data)
     
     # Return immediately with receipt
     return ChatResponse(

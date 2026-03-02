@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from .services.kb_api import kb_router
 from .services.chatbot_api import chatbot_router
 from .services.write_api import write_router
+from .services.internal_api import internal_router
 from .utils.db_utils import DBUtils
 
 @asynccontextmanager
@@ -38,6 +39,7 @@ app = FastAPI(
 app.include_router(kb_router, prefix="/kb", tags=["kb"])
 app.include_router(chatbot_router, prefix="/chatbot", tags=["chatbot"])
 app.include_router(write_router, prefix="/write", tags=["write"])
+app.include_router(internal_router, prefix="/internal", tags=["internal"])
 
 @app.get("/")
 def root():
