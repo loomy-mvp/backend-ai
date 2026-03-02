@@ -39,6 +39,7 @@ if gcp_credentials_info:
     gcp_credentials_info = json.loads(gcp_credentials_info)
     gcp_service_account_credentials = service_account.Credentials.from_service_account_info(gcp_credentials_info)
     storage_client = storage.Client(credentials=gcp_service_account_credentials)
+    logger.info("[kb_api] GCS initialized with env credentials")
 else:
     # Use default credentials (e.g., Cloud Run service account)
     storage_client = storage.Client()
