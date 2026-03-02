@@ -18,6 +18,8 @@ import sys
 from datetime import datetime
 from typing import List, Dict, Optional
 import os
+from dotenv import load_dotenv
+load_dotenv()
 
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -55,7 +57,7 @@ SEARCH_URL = (
 
 def _env_float(name: str, default: float) -> float:
     try:
-        return float(os.getenv(name, str(default)))
+        return float(os.environ.get(name, str(default)))
     except Exception:
         return default
 
@@ -87,8 +89,8 @@ class CommercialisitiScraper:
 
     # Fields to extract from the detail page via regex on the plain text
     FIELD_PATTERNS: Dict[str, str] = {
-        "nome_completo":        r"Iscritto\s+([A-ZÀÈÉÌÒÙÁÍÓÚ\s\'-]+?)(?:\n|Nato|$)",
-        "luogo_nascita":        r"Nato\s+a\s*:\s*([^,\n]+)",
+        "nome_completo":        r"Iscritto\s*:\s*([A-ZÀÈÉÌÒÙÁÍÓÚ][A-ZÀÈÉÌÒÙÁÍÓÚ\s\'-]+?)(?:\s*Nato|\n|$)",
+        "luogo_nascita":        r"Nato\s+a\s*:\s*([^,\n]+?)(?=\s*il\s*:|\n|$)",
         "data_nascita":         r"il\s*:\s*(\d{2}/\d{2}/\d{4})",
         "ordine":               r"Ordine\s+di\s*:\s*([^\n]+)",
         "data_anzianita":       r"Data\s+anzianit[àa]\s*:\s*(\d{2}/\d{2}/\d{4})",
@@ -170,7 +172,7 @@ class CommercialisitiScraper:
     def _init_gcs(self):
         """Initialise the GCS client using explicit credentials or ADC."""
         try:
-            gcp_credentials_info = os.getenv("GCP_SERVICE_ACCOUNT_CREDENTIALS")
+            gcp_credentials_info = os.environ.get("GCP_SERVICE_ACCOUNT_CREDENTIALS")
             if gcp_credentials_info:
                 logger.info("Using GCP credentials from environment variable")
                 gcp_credentials_info = json.loads(gcp_credentials_info)
@@ -212,19 +214,68 @@ class CommercialisitiScraper:
         except Exception as exc:
             logger.error(f"[GCS] Upload failed for {gcs_path}: {exc}")
 
+    def _gcs_download_output(self, local_path: str) -> bool:
+        """Download the existing output JSONL from GCS to *local_path* so that
+        appends in a fresh container don't overwrite previous runs' data.
+        Returns True if the file was restored, False if it didn't exist or failed."""
+        if not self.storage_client:
+            return False
+        try:
+            bucket = self.storage_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(GCS_OUTPUT_JSON)
+            if not blob.exists():
+                logger.info(f"[GCS] No existing output at gs://{GCS_BUCKET}/{GCS_OUTPUT_JSON} — starting fresh")
+                return False
+            blob.download_to_filename(local_path)
+            # Count pre-existing records so total_records is accurate
+            with open(local_path, encoding="utf-8") as f:
+                self.total_records = sum(1 for line in f if line.strip())
+            logger.info(
+                f"[GCS] Restored existing output → {local_path} "
+                f"({self.total_records} existing records)"
+            )
+            return True
+        except Exception as exc:
+            logger.error(f"[GCS] Could not restore output file: {exc}")
+            return False
+
     def _gcs_read_start_cap(self) -> Optional[str]:
         """Read the resume CAP from gs://GCS_BUCKET/GCS_START_FROM.
-        Returns the CAP string (e.g. '22079') or None on any error."""
+        Returns the CAP string (e.g. '22079') or None if the file does not
+        exist or its content is not a valid 5-digit CAP code.
+
+        NOTE: This method reads *only* from GCS_START_FROM.  It never falls
+        back to GCS_OUTPUT_JSON, so deleting start_from_cap.txt always
+        causes the job to restart from the very first CAP.
+        """
         if not self.storage_client:
             return None
         try:
+            # list_blobs() only enumerates *live* objects — soft-deleted /
+            # noncurrent versions are invisible, unlike blob.exists() which
+            # can still resolve them in some GCS soft-delete configurations.
+            live_blobs = list(
+                self.storage_client.list_blobs(
+                    GCS_BUCKET, prefix=GCS_START_FROM, max_results=1
+                )
+            )
+            if not live_blobs:
+                logger.info(
+                    f"[GCS] {GCS_START_FROM} has no live version — starting from the first CAP"
+                )
+                return None
             bucket = self.storage_client.bucket(GCS_BUCKET)
             blob = bucket.blob(GCS_START_FROM)
             cap = blob.download_as_text().strip()
+            # Accept only a bare 5-digit string so a stale JSON payload or any
+            # other corrupt content is silently ignored.
             if cap and cap.isdigit() and len(cap) == 5:
                 logger.info(f"[GCS] Resume CAP read from {GCS_START_FROM}: {cap}")
                 return cap
-            logger.warning(f"[GCS] Invalid CAP value in {GCS_START_FROM}: '{cap}'")
+            logger.warning(
+                f"[GCS] {GCS_START_FROM} contains unexpected value '{cap[:40]}' "
+                "(not a 5-digit CAP) — starting from the first CAP"
+            )
         except Exception as exc:
             logger.info(f"[GCS] Could not read {GCS_START_FROM} (starting from scratch): {exc}")
         return None
@@ -237,6 +288,7 @@ class CommercialisitiScraper:
         try:
             bucket = self.storage_client.bucket(GCS_BUCKET)
             blob = bucket.blob(GCS_START_FROM)
+            logger.debug(f"[GCS] Writing checkpoint CAP to {GCS_START_FROM}: {cap}")
             blob.upload_from_string(cap, content_type="text/plain")
             logger.debug(f"[GCS] Checkpoint CAP written: {cap}")
         except Exception as exc:
@@ -470,6 +522,7 @@ class CommercialisitiScraper:
           p (last)                         → "Data ultima modifica: …"
         """
         record: Dict = {field: "" for field in self.FIELD_PATTERNS}
+        record["telefono"] = ""
         record["cap_code"] = cap
         record["scraped_at"] = datetime.now().isoformat(timespec="seconds")
 
@@ -487,13 +540,15 @@ class CommercialisitiScraper:
             return record
 
         # ── Name from header ──────────────────────────────────────────────────
-        name_el = main.select_one("h2 > i")
-        if name_el:
-            raw = name_el.get_text(strip=True)
-            # Strip leading "Iscritto:" prefix if present
-            record["nome_completo"] = re.sub(
-                r"^[Ii]scritto\s*:\s*", "", raw
-            ).strip()[:200]
+        # Real HTML: <h2><i class="fa fa-user"></i> Iscritto  NOME COGNOME</h2>
+        # The name is a text node inside h2, NOT inside the <i> tag.
+        h2_el = main.select_one("h2")
+        if h2_el:
+            raw = h2_el.get_text(" ", strip=True)
+            # Strip icon text artifacts and "Iscritto" prefix (no colon on page)
+            cleaned = re.sub(r"^[Ii]scritto\s*:?\s*", "", raw).strip()
+            if cleaned:
+                record["nome_completo"] = cleaned[:200]
 
         # ── Info box ──────────────────────────────────────────────────────────
         box = main.select_one("div.box-avvisi.row.row-evento")
@@ -514,7 +569,7 @@ class CommercialisitiScraper:
             if len(children) >= 2:
                 paras = _paragraphs(children[1])
                 field_map_2 = [
-                    ("luogo_nascita",        r"Nato\s+a\s*:\s*(.+)"),
+                    ("luogo_nascita",        r"Nato\s+a\s*:\s*(.+?)(?=\s*il\s*:|\n|$)"),
                     ("data_nascita",         r"il\s*:\s*(\d{2}/\d{2}/\d{4})"),
                     ("titolo_professionale", r"Titolo\s+professionale\s*:\s*(.+)"),
                     ("revisore_contabile",   r"Revisore\s+contabile\s*:\s*(.+)"),
@@ -546,20 +601,58 @@ class CommercialisitiScraper:
                                 record[field] = m.group(1).strip()[:200]
                     self._assign_by_regex(record, p_text)
 
-            # ── div:nth-child(4) — 1 item (sede studio / altro titolo) ────────
+            # ── div:nth-child(4) — sede studio + phone (icon-based) ────────────
             if len(children) >= 4:
-                paras = _paragraphs(children[3])
-                field_map_4 = [
-                    ("sede_studio",   r"Sede\s+studio\s*:\s*(.+)"),
-                    ("altro_titolo",  r"Altro\s+titolo\s+professionale\s*:\s*(.+)"),
-                ]
-                for p_text in paras:
-                    for field, pat in field_map_4:
-                        if not record[field]:
-                            m = re.search(pat, p_text, re.IGNORECASE)
-                            if m:
-                                record[field] = m.group(1).strip()[:200]
-                    self._assign_by_regex(record, p_text)
+                div4 = children[3]
+
+                # Real HTML inside the <strong>:
+                #   <i class="fa fa-map-marker"></i> VIA ROMA 17 ... (RM)
+                #   <i class="fa fa-phone"></i> 069551605 <br/>
+                # Both icons are siblings inside the same <strong>.
+                # Walk children: collect addr text before fa-phone, phone text after.
+                for strong in div4.find_all("strong"):
+                    phone_icon = strong.find("i", class_="fa-phone")
+                    if not phone_icon:
+                        continue
+                    addr_parts, phone_parts = [], []
+                    past_phone = False
+                    for child in strong.children:
+                        is_tag = getattr(child, "name", None) is not None  # True only for Tag nodes
+                        if is_tag and "fa-phone" in (child.get("class") or []):
+                            past_phone = True
+                            continue
+                        if is_tag and "fa-" in " ".join(child.get("class") or []):
+                            # other icon (e.g. fa-map-marker) — skip the tag itself
+                            continue
+                        text = str(child).strip()
+                        if not text or text == "<br/>":
+                            continue
+                        if past_phone:
+                            phone_parts.append(text)
+                        else:
+                            addr_parts.append(text)
+                    addr = re.sub(r"\s+", " ", " ".join(addr_parts)).strip()
+                    phone = re.sub(r"\D", "", " ".join(phone_parts))
+                    if addr and not record["sede_studio"]:
+                        record["sede_studio"] = addr[:200]
+                    if phone and not record["telefono"]:
+                        record["telefono"] = phone
+                    break
+
+                # Fallback: regex on paragraph text for sede_studio / altro_titolo
+                if not record["sede_studio"] or not record["altro_titolo"]:
+                    paras = _paragraphs(div4)
+                    field_map_4 = [
+                        ("sede_studio",  r"Sede\s+studio\s*:\s*(.+)"),
+                        ("altro_titolo", r"Altro\s+titolo\s+professionale\s*:\s*(.+)"),
+                    ]
+                    for p_text in paras:
+                        for field, pat in field_map_4:
+                            if not record[field]:
+                                m = re.search(pat, p_text, re.IGNORECASE)
+                                if m:
+                                    record[field] = m.group(1).strip()[:200]
+                        self._assign_by_regex(record, p_text)
 
         # ── Update date (last <p> in #main-content) ───────────────────────────
         all_p = main.find_all("p")
@@ -788,6 +881,9 @@ class CommercialisitiScraper:
         """Scrape all CAPs, with optional limit and resume support."""
         # Initialise GCS first (needed for checkpoint uploads)
         self._init_gcs()
+
+        # Restore any previously accumulated output so appends don't clobber it
+        self._gcs_download_output(self.output_file)
 
         if not self.setup_driver():
             logger.error("[FATAL] Cannot initialise WebDriver — exiting")
