@@ -9,7 +9,7 @@ from bs4 import BeautifulSoup
 
 ###### EDIT THIS ######
 TARGET_LAWS = [
-    {"slug": "Codice civile", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:codice.civile:1942-03-16;262!vig="},
+    {"slug": "Legge di bilancio 2026", "url": "https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2025-12-30;199!vig="},
 ]
 
 # ! Run it from inside the parlamento folder
