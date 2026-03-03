@@ -1,8 +1,8 @@
-"""Google Cloud Tasks integration for async chat processing.
+"""Google Cloud Tasks integration for async processing.
 
-Instead of running chat requests in-process via BackgroundTasks, this module
-enqueues them as Cloud Tasks that call back into the ``/internal/process-chat``
-worker endpoint.  Cloud Tasks handles concurrency throttling, automatic retries
+Instead of running requests in-process via BackgroundTasks, this module
+enqueues them as Cloud Tasks that call back into ``/internal/*`` worker
+endpoints.  Cloud Tasks handles concurrency throttling, automatic retries
 and persistence.
 
 Required environment variables
@@ -51,8 +51,8 @@ def _get_credentials():
     )
 
 
-def enqueue_chat_task(chat_data: dict) -> tasks_v2.Task:
-    """Create a Cloud Task that POSTs *chat_data* to the worker endpoint."""
+def _enqueue_task(endpoint_path: str, payload: dict, label: str = "task") -> tasks_v2.Task:
+    """Generic helper – enqueue a Cloud Task targeting *endpoint_path*."""
 
     project = _get_env("GCP_PROJECT_ID", required=True)
     location = _get_env("GCP_LOCATION", default="europe-west1")
@@ -64,13 +64,13 @@ def enqueue_chat_task(chat_data: dict) -> tasks_v2.Task:
     client = tasks_v2.CloudTasksClient(credentials=credentials)
     parent = client.queue_path(project, location, queue)
 
-    target_url = f"{worker_base_url.rstrip('/')}/internal/process-chat"
+    target_url = f"{worker_base_url.rstrip('/')}{endpoint_path}"
 
     http_request: dict = {
         "http_method": tasks_v2.HttpMethod.POST,
         "url": target_url,
         "headers": {"Content-Type": "application/json"},
-        "body": json.dumps(chat_data).encode(),
+        "body": json.dumps(payload).encode(),
     }
 
     # Attach an OIDC token so the worker can verify the caller
@@ -83,5 +83,15 @@ def enqueue_chat_task(chat_data: dict) -> tasks_v2.Task:
     task: dict = {"http_request": http_request}
 
     response = client.create_task(request={"parent": parent, "task": task})
-    logger.info("[enqueue_chat_task] Task created: %s", response.name)
+    logger.info("[%s] Task created: %s", label, response.name)
     return response
+
+
+def enqueue_chat_task(chat_data: dict) -> tasks_v2.Task:
+    """Enqueue a chat processing task."""
+    return _enqueue_task("/internal/process-chat", chat_data, label="enqueue_chat_task")
+
+
+def enqueue_write_task(write_data: dict) -> tasks_v2.Task:
+    """Enqueue a document writing task."""
+    return _enqueue_task("/internal/process-write", write_data, label="enqueue_write_task")

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from typing import Optional, Any
 from datetime import datetime
@@ -26,6 +26,7 @@ from backend.config.chatbot_config import WRITER_CONFIG
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.utils.auth import verify_token
 from backend.utils.email_notification import send_error_email
+from backend.services.task_queue import enqueue_write_task
 
 write_router = APIRouter(dependencies=[Depends(verify_token)])
 
@@ -140,7 +141,6 @@ async def process_write_request(write_data: dict):
 # API Endpoints
 @write_router.post("/write", response_model=WriteResponse)
 async def write_document(
-    background_tasks: BackgroundTasks,
     request: WriteRequest
 ):
     """
@@ -201,8 +201,8 @@ async def write_document(
         "max_tokens": max_tokens
     }
     
-    # Add write processing to background tasks
-    background_tasks.add_task(process_write_request, write_data)
+    # Enqueue write processing via Google Cloud Tasks
+    enqueue_write_task(write_data)
     
     # Return immediately with receipt
     return WriteResponse(

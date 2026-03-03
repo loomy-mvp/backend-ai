@@ -18,6 +18,7 @@ from google.auth.transport import requests as google_auth_requests
 from google.oauth2 import id_token
 
 from backend.services.chatbot_api import process_chat_request
+from backend.services.write_api import process_write_request
 
 logger = logging.getLogger(__name__)
 
@@ -89,5 +90,22 @@ async def worker_process_chat(request: Request):
     # process_chat_request already catches exceptions internally and sends
     # error webhooks, so we do not need extra error handling here.
     await process_chat_request(chat_data)
+
+    return {"status": "ok"}
+
+
+@internal_router.post(
+    "/process-write",
+    dependencies=[Depends(verify_cloud_tasks_token)],
+)
+async def worker_process_write(request: Request):
+    """Called by Cloud Tasks to execute the document writing pipeline."""
+    write_data: dict = await request.json()
+    logger.info(
+        "[worker_process_write] Received task for message_id=%s",
+        write_data.get("message_id"),
+    )
+
+    await process_write_request(write_data)
 
     return {"status": "ok"}
