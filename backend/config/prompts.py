@@ -3,7 +3,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage
 
 IMAGE_ANALYSIS_PROMPT: Final[str] = (
-    """Descrivi l'immagine e riporta integralmente il testo quando presente, organizzandolo in modo significativo in accordo con la descrizione dell'immagine."""
+    """Descrivi l'immagine e riporta integralmente il testo quando presente, integrandolo in modo coerente con la descrizione dell'immagine."""
 )
 
 TONE_DESCRIPTIONS: Dict[str, str] = {

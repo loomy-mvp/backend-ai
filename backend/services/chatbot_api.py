@@ -26,7 +26,7 @@ retriever = Retriever()
 KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
-from backend.config.chatbot_config import CHATBOT_CONFIG, SIMILARITY_THRESHOLD
+from backend.config.chatbot_config import CHATBOT_CONFIG, SIMILARITY_THRESHOLD, VISION_CONFIG
 from backend.config.prompts import (
     NO_RAG_SYSTEM_PROMPT,
     RAG_SYSTEM_PROMPT,
@@ -35,7 +35,9 @@ from backend.config.prompts import (
     format_docs,
     format_context,
     build_question_messages,
+    format_attachment_block,
 )
+from backend.utils.ai_workflow_utils.document_processing import ImageProcessor
 
 from backend.utils.ai_workflow_utils.get_config_value import get_config_value
 from backend.utils.ai_workflow_utils.get_llm import get_llm
@@ -145,6 +147,38 @@ def retrieve_relevant_docs(
     print(retrieval.get("results", []))
     return retrieval.get("results", [])
 
+def _describe_images(image_inputs: List[dict], attachment_context: str, retrieval_query: str) -> tuple[str, str]:
+    """Helper function to describe inline image attachments using the vision model."""
+    logger.info("[_describe_images] Describing image attachments using ImageProcessor")
+    from backend.utils.ai_workflow_utils.document_processing import ImageProcessor
+    import base64
+    processor = ImageProcessor()
+    
+    for image in image_inputs:
+        logger.info(f"[_describe_images] Describing image: {image['filename']}")
+        
+        data_url: str = image["data_url"]
+        mime_part, b64_part = data_url.split(";", 1)
+        image_format = mime_part.split("/", 1)[1]  # 'jpeg', 'png'
+        image_bytes = base64.b64decode(b64_part.split(",", 1)[1])
+        
+        description = processor.analyze_image(
+            image_bytes=image_bytes,
+            image_format=image_format,
+            context=f"Image attachment from user chat: {image['filename']}"
+        )
+        
+        if description:
+            retrieval_query += f"\n\n[Image '{image['filename']}' Description]\n{description}"
+            
+            image_text_block = format_attachment_block(image["filename"], description)
+            if attachment_context:
+                attachment_context += f"\n----------\n{image_text_block}"
+            else:
+                attachment_context = image_text_block
+                
+    return attachment_context, retrieval_query
+
 async def process_chat_request(chat_data: dict):
     """Background task to process chat request with RAG functionality."""
     try:
@@ -174,6 +208,13 @@ async def process_chat_request(chat_data: dict):
         attachment_context, attachment_count, image_inputs = _build_attachment_context(attachments)
         logger.info(f"[process_chat_request] Processed {attachment_count} text attachments and {len(image_inputs)} images")
 
+        retrieval_query = message
+
+        if image_inputs:
+            attachment_context, retrieval_query = _describe_images(
+                image_inputs, attachment_context, retrieval_query
+            )
+
         # Initialize LLM
         llm = get_llm(provider, model, temperature, max_tokens)
         logger.info("[process_chat_request] LLM initialized")
@@ -188,7 +229,7 @@ async def process_chat_request(chat_data: dict):
             logger.info("[process_chat_request] Empty chat history; forcing retrieval")
         else:
             try:
-                retrieve = retrieval_judge.judge_retrieval(chat_history, message)
+                retrieve = retrieval_judge.judge_retrieval(chat_history, retrieval_query)
                 logger.info(f"[process_chat_request] Retrieval decision: {retrieve}")
             except Exception as e:
                 logger.error(f"[process_chat_request] Error during retrieval judgment: {e}")
@@ -207,7 +248,7 @@ async def process_chat_request(chat_data: dict):
             system_message = RAG_SYSTEM_PROMPT.format(tone_of_voice=tone_description)
             try:
                 docs = retrieve_relevant_docs(
-                    query=message,
+                    query=retrieval_query,
                     index_name=index_name,
                     namespace=namespace,
                     libraries=libraries,

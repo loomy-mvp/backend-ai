@@ -8,6 +8,7 @@ class ModelProvider(str, Enum):
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
+    AMAZON = "amazon"
 
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,10 @@ def check_provider_status(provider: ModelProvider) -> None:
             return
         url = f"https://generativelanguage.googleapis.com/v1/models?key={api_key}"
         headers = {}
+    elif provider == ModelProvider.AMAZON:
+        # AWS credentials usually checked via boto3 environment or IAM
+        logger.info("Skipping explicit status check for Amazon provider as it relies on AWS credentials")
+        return
     else:
         logger.warning("Unsupported provider for status check: %s", provider)
         return
@@ -70,6 +75,7 @@ def get_llm(
         ModelProvider.OPENAI: ("langchain_openai", "ChatOpenAI", "max_tokens"),
         ModelProvider.ANTHROPIC: ("langchain_anthropic", "ChatAnthropic", "max_tokens"),
         ModelProvider.GOOGLE: ("langchain_google_genai", "ChatGoogleGenerativeAI", "max_tokens"),
+        ModelProvider.AMAZON: ("langchain_aws", "ChatBedrockConverse", "max_tokens"),
     }
     # Provider-specific logging opt-out parameters to keep requests private by default
     privacy_overrides = {

@@ -23,8 +23,6 @@ from typing import Callable, Dict, List, Optional, Tuple, Type
 import boto3
 import pdfplumber
 import psutil
-from botocore.config import Config
-from botocore.exceptions import ClientError
 from docx import Document as DocxDocument
 from docx.oxml.ns import qn
 from docx.table import Table
@@ -32,9 +30,12 @@ from openpyxl import load_workbook
 from PIL import Image
 from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
+from langchain_core.messages import HumanMessage
+
+from backend.config.chatbot_config import VISION_CONFIG
+from backend.utils.ai_workflow_utils.get_llm import get_llm
 
 from backend.config.document_processing_config import (
-    IMAGE_ANALYSIS_CONFIG,
     MAX_IMAGE_SIZE_BYTES,
     SUPPORTED_IMAGE_FORMATS,
 )
@@ -77,11 +78,9 @@ def has_cid_corruption(text: str) -> bool:
 class DocumentProcessor(ABC):
     """Base interface for document processors.
     
-    Provides shared functionality for image analysis via AWS Bedrock,
+    Provides shared functionality for image analysis via modular LLM config,
     which can be used by all subclasses when processing documents with images.
     """
-
-    _bedrock_client = None
 
     @staticmethod
     def _deduplicate_images(
@@ -105,18 +104,14 @@ class DocumentProcessor(ABC):
         return unique
 
     @classmethod
-    def _get_bedrock_client(cls):
-        """Get or create a shared Bedrock Runtime client."""
-        if cls._bedrock_client is None:
-            config = Config(
-                region_name=IMAGE_ANALYSIS_CONFIG.get("region", "eu-central-1"),
-                retries={
-                    "max_attempts": IMAGE_ANALYSIS_CONFIG.get("max_retries", 3),
-                    "mode": "adaptive",
-                },
-            )
-            cls._bedrock_client = boto3.client("bedrock-runtime", config=config)
-        return cls._bedrock_client
+    def _get_vision_llm(cls):
+        """Get the vision LLM instance based on configuration."""
+        return get_llm(
+            provider=VISION_CONFIG.get("provider", "google"),
+            model=VISION_CONFIG.get("model", "gemini-2.5-flash-lite"),
+            temperature=VISION_CONFIG.get("temperature", 0.0),
+            max_tokens=VISION_CONFIG.get("max_tokens", 1000)
+        )
 
     def analyze_image(
         self,
@@ -124,7 +119,7 @@ class DocumentProcessor(ABC):
         image_format: str,
         context: str = "",
     ) -> Optional[str]:
-        """Analyze an image using AWS Bedrock Nova Lite vision model.
+        """Analyze an image using the configured vision model.
         
         Args:
             image_bytes: Raw bytes of the image
@@ -144,37 +139,40 @@ class DocumentProcessor(ABC):
             return None
 
         # Validate format
-        if image_format.lower() not in ["png", "jpeg", "gif", "webp"]:
+        if image_format.lower() not in ["png", "jpeg", "jpg", "gif", "webp"]:
             logger.warning("Unsupported image format: %s", image_format)
             return None
 
-        # Build the prompt with optional context
-        prompt = IMAGE_ANALYSIS_PROMPT
-        if context:
-            prompt = f"{context}\n\n{prompt}"
-
-        # Build the message with image content
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "image": {
-                            "format": image_format.lower(),
-                            "source": {
-                                "bytes": image_bytes,
-                            },
-                        },
-                    },
-                    {
-                        "text": prompt,
-                    },
-                ],
-            }
-        ]
-
         try:
-            return self._call_bedrock_with_retry(messages)
+            prompt = IMAGE_ANALYSIS_PROMPT
+            if context:
+                prompt = f"{context}\n\n{prompt}"
+
+            b64_data = base64.b64encode(image_bytes).decode("utf-8")
+            data_url = f"data:image/{image_format.lower()};base64,{b64_data}"
+
+            messages = [
+                HumanMessage(content=[
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": data_url}}
+                ])
+            ]
+
+            llm = self._get_vision_llm()
+            # If the async path is typically used, we can't easily rely on awaiting here since
+            # DocumentProcessor.process loops synchronously, so we use the synchronous `invoke`
+            response = llm.invoke(messages)
+            
+            # Log token usage if available in response.usage_metadata
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                logger.debug(
+                    "Image analysis tokens - Input: %d, Output: %d",
+                    response.usage_metadata.get("input_tokens", 0),
+                    response.usage_metadata.get("output_tokens", 0),
+                )
+
+            return response.content
+
         except Exception as e:
             logger.error("Image analysis failed: %s", str(e))
             return None
@@ -184,7 +182,7 @@ class DocumentProcessor(ABC):
         images: List[Tuple[bytes, str]],
         context: str = "",
     ) -> Optional[str]:
-        """Analyze multiple images in a single Bedrock call.
+        """Analyze multiple images in a single API call if supported.
         
         Args:
             images: List of tuples (image_bytes, image_format)
@@ -202,7 +200,7 @@ class DocumentProcessor(ABC):
             if len(image_bytes) > MAX_IMAGE_SIZE_BYTES:
                 logger.warning("Skipping oversized image in batch")
                 continue
-            if image_format.lower() not in ["png", "jpeg", "gif", "webp"]:
+            if image_format.lower() not in ["png", "jpeg", "jpg", "gif", "webp"]:
                 logger.warning("Skipping unsupported format in batch: %s", image_format)
                 continue
             valid_images.append((image_bytes, image_format))
@@ -210,98 +208,39 @@ class DocumentProcessor(ABC):
         if not valid_images:
             return None
 
-        # Build content blocks with all images
-        content_blocks: List[dict] = []
-        for image_bytes, image_format in valid_images:
-            content_blocks.append({
-                "image": {
-                    "format": image_format.lower(),
-                    "source": {
-                        "bytes": image_bytes,
-                    },
-                },
-            })
-
-        # Add the prompt
-        prompt = IMAGE_ANALYSIS_PROMPT
-        if context:
-            prompt = f"{context}\n\n{prompt}"
-        content_blocks.append({"text": prompt})
-
-        messages = [{"role": "user", "content": content_blocks}]
-
         try:
-            return self._call_bedrock_with_retry(messages)
+            content_blocks: List[dict] = []
+            
+            prompt = IMAGE_ANALYSIS_PROMPT
+            if context:
+                prompt = f"{context}\n\n{prompt}"
+            content_blocks.append({"type": "text", "text": prompt})
+
+            for image_bytes, image_format in valid_images:
+                b64_data = base64.b64encode(image_bytes).decode("utf-8")
+                data_url = f"data:image/{image_format.lower()};base64,{b64_data}"
+                content_blocks.append({
+                    "type": "image_url",
+                    "image_url": {"url": data_url}
+                })
+
+            messages = [HumanMessage(content=content_blocks)]
+
+            llm = self._get_vision_llm()
+            response = llm.invoke(messages)
+            
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                logger.debug(
+                    "Multi-image analysis tokens - Input: %d, Output: %d",
+                    response.usage_metadata.get("input_tokens", 0),
+                    response.usage_metadata.get("output_tokens", 0),
+                )
+
+            return response.content
+
         except Exception as e:
             logger.error("Multi-image analysis failed: %s", str(e))
             return None
-
-    def _call_bedrock_with_retry(self, messages: List[dict]) -> str:
-        """Call Bedrock API with retry logic for throttling.
-        
-        Args:
-            messages: The messages to send to the model
-            
-        Returns:
-            The model's response text
-            
-        Raises:
-            Exception: If the API call fails after retries
-        """
-        client = self._get_bedrock_client()
-        model_id = IMAGE_ANALYSIS_CONFIG["model_id"]
-        max_retries = IMAGE_ANALYSIS_CONFIG.get("max_retries", 3)
-        retry_delay = IMAGE_ANALYSIS_CONFIG.get("retry_delay_seconds", 5)
-
-        for attempt in range(max_retries):
-            try:
-                response = client.converse(
-                    modelId=model_id,
-                    messages=messages,
-                    inferenceConfig={
-                        "temperature": IMAGE_ANALYSIS_CONFIG.get("temperature", 0.3),
-                        "maxTokens": IMAGE_ANALYSIS_CONFIG.get("max_tokens", 2000),
-                        "topP": IMAGE_ANALYSIS_CONFIG.get("top_p", 0.9),
-                    },
-                )
-
-                # Extract the response text
-                output_message = response.get("output", {}).get("message", {})
-                content_blocks = output_message.get("content", [])
-
-                response_text = ""
-                for block in content_blocks:
-                    if "text" in block:
-                        response_text += block["text"]
-
-                # Log the full response text
-                # logger.info("Image analysis response text: %s", response_text)
-
-                # Log token usage
-                usage = response.get("usage", {})
-                logger.debug(
-                    "Image analysis tokens - Input: %d, Output: %d",
-                    usage.get("inputTokens", 0),
-                    usage.get("outputTokens", 0),
-                )
-
-                return response_text
-
-            except ClientError as exc:
-                error_code = (exc.response.get("Error") or {}).get("Code")
-                if error_code == "ThrottlingException" and attempt < max_retries - 1:
-                    logger.warning(
-                        "Bedrock throttled, sleeping %d seconds (attempt %d/%d)",
-                        retry_delay,
-                        attempt + 1,
-                        max_retries,
-                    )
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
-                    continue
-                raise
-
-        raise RuntimeError("Bedrock API call failed after all retries")
 
     @abstractmethod
     def process(
@@ -1422,6 +1361,45 @@ class XmlDocumentProcessor(DocumentProcessor):
         return chunks
 
 
+class ImageProcessor(DocumentProcessor):
+    """Process image documents by extracting descriptions via vision models."""
+    
+    def process(
+        self,
+        file_bytes: bytes,
+        *,
+        chunk_document: Chunker,
+        storage_path: str,
+        doc_name: str,
+    ) -> list[Chunk]:
+        chunks: list[Chunk] = []
+
+        # Guess format from doc_name or use a default
+        image_format = "png"
+        if doc_name and "." in doc_name:
+            ext = doc_name.rsplit(".", 1)[-1].lower()
+            if ext in ["jpg", "jpeg"]:
+                image_format = "jpeg"
+            elif ext in ["png", "gif", "webp"]:
+                image_format = ext
+
+        description = self.analyze_image(
+            image_bytes=file_bytes,
+            image_format=image_format,
+            context=f"Image document '{doc_name}'"
+        )
+        
+        if description and description.strip():
+            doc_metadata = {
+                "name": doc_name,
+                "page": 1,
+                "storage_path": storage_path,
+                "has_images": True,
+            }
+            chunks.extend(chunk_document(doc_metadata, description))
+            
+        return chunks
+
 _CONTENT_TYPE_PROCESSORS: Dict[str, Type[DocumentProcessor]] = {
     "application/pdf": PDFDocumentProcessor,
     "text/plain": TextDocumentProcessor,
@@ -1431,6 +1409,11 @@ _CONTENT_TYPE_PROCESSORS: Dict[str, Type[DocumentProcessor]] = {
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": PptxDocumentProcessor,
     "application/xml": XmlDocumentProcessor,
     "text/xml": XmlDocumentProcessor,
+    "image/png": ImageProcessor,
+    "image/jpeg": ImageProcessor,
+    "image/jpg": ImageProcessor,
+    "image/gif": ImageProcessor,
+    "image/webp": ImageProcessor,
 }
 
 _EXTENSION_FALLBACKS: Dict[str, Type[DocumentProcessor]] = {
@@ -1441,6 +1424,11 @@ _EXTENSION_FALLBACKS: Dict[str, Type[DocumentProcessor]] = {
     ".xlsx": XlsxDocumentProcessor,
     ".pptx": PptxDocumentProcessor,
     ".xml": XmlDocumentProcessor,
+    ".png": ImageProcessor,
+    ".jpg": ImageProcessor,
+    ".jpeg": ImageProcessor,
+    ".gif": ImageProcessor,
+    ".webp": ImageProcessor,
 }
 
 

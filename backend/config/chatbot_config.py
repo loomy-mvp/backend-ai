@@ -49,9 +49,17 @@ EMBEDDING_CONFIG = {
 RETRIEVAL_JUDGE_CONFIG = {
     "model": 'gemini-2.5-flash-lite', # gpt-5-nano-2025-08-07, claude-haiku-4-5, gemini-2.5-flash-lite
     "provider": 'google',
-    "max_tokens": 1000
+    "max_tokens": 100
 }
 RETRIEVAL_JUDGE_CONFIG["temperature"] = 0.0 if not "gpt-5" in RETRIEVAL_JUDGE_CONFIG['model'] else 1
+
+######## Vision Configuration ########
+VISION_CONFIG = {
+    "model": 'gemini-2.5-flash-lite',
+    "provider": 'google',
+    "max_tokens": 1000
+}
+VISION_CONFIG["temperature"] = 0.0
 
 ######## Writer configuration ########
 WRITER_CONFIG = {
