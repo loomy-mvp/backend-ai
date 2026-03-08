@@ -23,8 +23,6 @@ from backend.services.retrieve import Retriever
 retriever = Retriever()
 
 # Configuration
-KB_API_BASE_URL = os.getenv("KB_API_BASE_URL", "http://localhost:8000/kb")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
 from backend.config.chatbot_config import CHATBOT_CONFIG, SIMILARITY_THRESHOLD, VISION_CONFIG
 from backend.config.prompts import (
