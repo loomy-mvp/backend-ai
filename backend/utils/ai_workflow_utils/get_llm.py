@@ -83,6 +83,18 @@ def get_llm(
         ModelProvider.ANTHROPIC: {"metadata": {"anthropic-beta": "do-not-log"}},
         # ModelProvider.GOOGLE: not_available
     }
+    # Provider-specific prompt caching parameters
+    prompt_caching_params = {
+        ModelProvider.OPENAI: {
+            "prompt_cache_key": str,
+            "prompt_cache_retention": "24h",
+        },
+        ModelProvider.ANTHROPIC: {
+            "extra_headers": {"anthropic-beta": "extended-cache-ttl-2025-04-11"},
+        },
+        # Google already implements cache by default
+        # Amazon Nova already implements cache by default (5min TTL, no extended option)
+    }
     
     if provider is None:
         provider = get_config_value(config_set=CHATBOT_CONFIG, key="provider")
@@ -124,6 +136,10 @@ def get_llm(
         opt_out_kwargs = privacy_overrides.get(provider) # ? Do i need .value?
         if opt_out_kwargs:
             kwargs.update(opt_out_kwargs)
+
+        cache_kwargs = prompt_caching_params.get(provider)
+        if cache_kwargs:
+            kwargs.update(cache_kwargs)
 
         thinking_kwargs = provider_thinking_kwargs.get(provider.value)
         if thinking_kwargs:
