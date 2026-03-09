@@ -110,7 +110,8 @@ class DocumentProcessor(ABC):
             provider=VISION_CONFIG.get("provider", "google"),
             model=VISION_CONFIG.get("model", "gemini-2.5-flash-lite"),
             temperature=VISION_CONFIG.get("temperature", 0.0),
-            max_tokens=VISION_CONFIG.get("max_tokens", 1000)
+            max_tokens=VISION_CONFIG.get("max_tokens", 1000),
+            prompt_cache_key=IMAGE_ANALYSIS_PROMPT
         )
 
     def analyze_image(

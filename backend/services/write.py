@@ -1,7 +1,12 @@
 import logging
 
 from backend.config.chatbot_config import WRITER_PROVIDER_THINKING_KWARGS
-from backend.config.prompts import WRITE_PROMPT_TEMPLATE, WRITE_REFINEMENT_PROMPT_TEMPLATE
+from backend.config.prompts import (
+    WRITE_PROMPT_TEMPLATE,
+    WRITE_REFINEMENT_PROMPT_TEMPLATE,
+    WRITE_SYSTEM_PROMPT,
+    WRITE_REFINEMENT_SYSTEM_PROMPT,
+)
 from backend.utils.ai_workflow_utils.get_llm import get_llm
 from backend.utils.ai_workflow_utils.create_chain import create_chain
 from backend.utils.ai_workflow_utils.get_chat_history import get_chat_history
@@ -36,6 +41,14 @@ class Writer:
         """
         try:
             logger.info("[write_document] Starting document generation")
+
+            # Get chat history
+            chat_history = get_chat_history(conversation_id)
+            logger.info(f"[write_document] Chat history length: {len(chat_history)}")
+            
+            # Choose prompt template based on chat history
+            system_prompt_str = WRITE_REFINEMENT_SYSTEM_PROMPT if chat_history else WRITE_SYSTEM_PROMPT
+            prompt_template = WRITE_REFINEMENT_PROMPT_TEMPLATE if chat_history else WRITE_PROMPT_TEMPLATE
             
             # Initialize LLM
             llm = get_llm(
@@ -44,15 +57,10 @@ class Writer:
                 llm_params.get("temperature"),
                 llm_params.get("max_tokens"),
                 provider_thinking_kwargs=WRITER_PROVIDER_THINKING_KWARGS,
+                prompt_cache_key=system_prompt_str,
             )
             logger.info("[write_document] LLM initialized")
             
-            # Get chat history
-            chat_history = get_chat_history(conversation_id)
-            logger.info(f"[write_document] Chat history length: {len(chat_history)}")
-            
-            # Choose prompt template based on chat history
-            prompt_template = WRITE_REFINEMENT_PROMPT_TEMPLATE if chat_history else WRITE_PROMPT_TEMPLATE
             chain = create_chain(llm=llm, prompt_template=prompt_template)
             logger.info(f"[write_document] Using {'refinement' if chat_history else 'initial'} prompt")
             

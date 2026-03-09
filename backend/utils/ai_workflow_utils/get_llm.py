@@ -66,6 +66,7 @@ def get_llm(
     max_tokens: int = None,
     provider_thinking_kwargs=None,
     web_search_kwarg=None,
+    prompt_cache_key: str = None,
 ):
     """Initialize LLM based on provider and model using config, with fallback to defaults."""
     import importlib
@@ -86,7 +87,7 @@ def get_llm(
     # Provider-specific prompt caching parameters
     prompt_caching_params = {
         ModelProvider.OPENAI: {
-            "prompt_cache_key": str,
+            "prompt_cache_key": prompt_cache_key,
             "prompt_cache_retention": "24h",
         },
         ModelProvider.ANTHROPIC: {

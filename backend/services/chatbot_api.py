@@ -213,10 +213,7 @@ async def process_chat_request(chat_data: dict):
                 image_inputs, attachment_context, retrieval_query
             )
 
-        # Initialize LLM
-        llm = get_llm(provider, model, temperature, max_tokens)
-        logger.info("[process_chat_request] LLM initialized")
-        
+
         # Get chat history
         chat_history = get_chat_history(conversation_id)
         logger.info(f"[process_chat_request] Chat history length: {len(chat_history)}")
@@ -263,7 +260,12 @@ async def process_chat_request(chat_data: dict):
         formatted_docs = format_docs(docs)
         context = format_context(attachment_context, formatted_docs)
         logger.info("[process_chat_request] Context formatted from attachments and retrieval")
-        logger.info("[process_chat_request] Attachment context: " + attachment_context[:50])
+        if attachment_context:
+            logger.info("[process_chat_request] Attachment context: " + attachment_context[:50])
+        
+        # Initialize LLM with the system message as the prompt_cache_key for routing
+        llm = get_llm(provider, model, temperature, max_tokens, prompt_cache_key=system_message)
+        logger.info("[process_chat_request] LLM initialized with caching key")
         
         # Create RAG chain
         chain = create_chain(llm=llm, prompt_template=CHAT_PROMPT_TEMPLATE)

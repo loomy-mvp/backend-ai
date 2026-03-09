@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from backend.utils.ai_workflow_utils.get_llm import get_llm
 from backend.utils.ai_workflow_utils.create_chain import create_chain
 from backend.config.chatbot_config import RETRIEVAL_JUDGE_CONFIG
-from backend.config.prompts import RETRIEVAL_JUDGE_PROMPT_TEMPLATE
+from backend.config.prompts import RETRIEVAL_JUDGE_PROMPT_TEMPLATE, RETRIEVAL_JUDGE_SYSTEM_PROMPT
 import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -25,7 +25,8 @@ class RetrievalJudge:
             provider=RETRIEVAL_JUDGE_CONFIG["provider"],
             model=RETRIEVAL_JUDGE_CONFIG["model"],
             max_tokens=RETRIEVAL_JUDGE_CONFIG["max_tokens"],
-            temperature=RETRIEVAL_JUDGE_CONFIG["temperature"]
+            temperature=RETRIEVAL_JUDGE_CONFIG["temperature"],
+            prompt_cache_key=RETRIEVAL_JUDGE_SYSTEM_PROMPT
         )
 
     def _parse_llm_response(self, raw: Any) -> Dict[str, Any]:
