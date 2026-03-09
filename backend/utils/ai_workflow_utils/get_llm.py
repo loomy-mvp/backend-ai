@@ -87,7 +87,7 @@ def get_llm(
     # Provider-specific prompt caching parameters
     prompt_caching_params = {
         ModelProvider.OPENAI: {
-            "prompt_cache_key": prompt_cache_key,
+            "prompt_cache_key": prompt_cache_key[:64] if prompt_cache_key else None, # max length allowed for the cache prefix
             "prompt_cache_retention": "24h",
         },
         ModelProvider.ANTHROPIC: {
