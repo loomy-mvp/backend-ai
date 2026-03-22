@@ -1,6 +1,9 @@
 from typing import Final, Dict, List, Any, Optional
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage
+from datetime import date, datetime
+current_date = datetime.today().strftime("%Y-%m-%d")
+
 
 IMAGE_ANALYSIS_PROMPT: Final[str] = (
     """Descrivi l'immagine e riporta integralmente il testo quando presente, integrandolo in modo coerente con la descrizione dell'immagine."""
@@ -14,7 +17,8 @@ TONE_DESCRIPTIONS: Dict[str, str] = {
 
 CHAT_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
         ("system", "{system_prompt}"),
-        ("user", "<<<Data corrente>>>\n{current_date}\n"),
+        # ("user", "<<<Data corrente>>>\n{current_date}\n"), # ! current_date must be a calculated here not passed as a param
+        ("user", f"<<<Data corrente>>>{current_date}"),
         ("user", "<<<Cronologia dei messaggi>>>\n{chat_history}\n"),
         ("user", "<<<Contesto>>>\n{context}\n"),
         MessagesPlaceholder(variable_name="question_messages")
@@ -24,7 +28,7 @@ _GUIDELINES_BASE = """Linee guida per le risposte:
 - Rimani obbligatoriamente all'interno del contesto professionale degli studi commercialisti. Non rispondere a domande al di fuori del contesto della contabilità, della consulenza aziendale o legale e simili.
 - Non essere eccessivamente servile e non chiedere scusa.
 - Se presenti riferimenti temporali nei documenti o nella richiesta dell'utente fai riferimento alla data corrente.
-- Cerca sul web se i riferimenti temporali esplicitati dall'utente sono recenti, ossia nel mese in corso o nei giorni intorno alla data corrente.
+- Cerca sul web se l'utente esplicita riferimenti recenti, ossia nel mese in corso o nei giorni intorno alla data corrente.
 - Se presente una cronologia dei messaggi precedenti, fai riferimento ad essa."""
 
 _DOCUMENT_WRITING_INSTRUCTIONS = """Sei anche in grado di assistere nella redazione e modifica di documenti professionali:
@@ -41,6 +45,8 @@ NO_RAG_SYSTEM_PROMPT = (
     "Rispondi alla domanda dell'utente sfruttando le tue conoscenze esperte nella materia.\n\n"
     
     + _GUIDELINES_BASE + "\n\n"
+    "- Cerca su internet se l'utente fa riferimento a documenti precisi.\n"
+    "- Cerca su internet se l'utente esplicita riferimenti recenti, ossia nel mese in corso o nei giorni intorno alla data corrente.\n"
     
     + _DOCUMENT_WRITING_INSTRUCTIONS + "\n\n"
     
@@ -52,7 +58,8 @@ RAG_SYSTEM_PROMPT = (
     "Rispondi alla domanda dell'utente valutando il contesto fornito e usando le parti utili.\n\n"
 
     + _GUIDELINES_BASE + "\n"
-    "- Se non puoi rispondere alla domanda in base ai documenti estratti (il contesto), dillo chiaramente.\n"
+    "- Se non puoi rispondere alla domanda in base al contesto fornito, cerca su internet.\n"
+    "- Cerca su internet se l'utente esplicita riferimenti recenti, ossia nel mese in corso o nei giorni intorno alla data corrente.\n"
     "- Sii sempre preciso e cita le fonti quando possibile.\n\n"
 
     + _DOCUMENT_WRITING_INSTRUCTIONS + "\n\n"
