@@ -18,13 +18,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Retriever
-from backend.services.retrieve import Retriever 
-retriever = Retriever()
+# Retrieval pipeline
+from backend.services.pipeline import retrieve_and_rerank
 
 # Configuration
 chatbot_webhook_url = os.getenv("CHATBOT_WEBHOOK_URL")
-from backend.config.chatbot_config import CHATBOT_CONFIG, SIMILARITY_THRESHOLD, VISION_CONFIG
+from backend.config.chatbot_config import CHATBOT_CONFIG, VISION_CONFIG
 from backend.config.prompts import (
     NO_RAG_SYSTEM_PROMPT,
     RAG_SYSTEM_PROMPT,
@@ -81,16 +80,6 @@ class ChatResponse(BaseModel):
     content: str
     metadata: dict
 
-class RetrieveRequest(BaseModel):
-    query: str
-    index_name: str
-    namespace: str | None = None  # Required when "private" is selected
-    libraries: list[str]  # e.g. ["organization", "private", "public"]
-    top_k: int = 5
-    similarity_threshold: float = SIMILARITY_THRESHOLD
-    sources: list[str] | None = None
-
-
 async def send_chatbot_webhook(chatbot_webhook_payload: dict):
     """Send chatbot processing status to the configured webhook."""
 
@@ -112,38 +101,6 @@ async def send_chatbot_webhook(chatbot_webhook_payload: dict):
         print(f"[webhook] Notification sent: status={chatbot_webhook_payload.get('status')} path={chatbot_webhook_payload.get('storage_path')}")
     except Exception as exc:
         print(f"[webhook] Failed to send notification: {exc}")
-
-# Retrieval function from kb_api.py
-def retrieve_relevant_docs(
-    query: str,
-    index_name: str,
-    namespace: str,
-    libraries: list,
-    top_k: int = 5,
-    similarity_threshold: float | None = None,
-    sources: Optional[List[str]] = None
-) -> List[dict]:
-    """Retrieve relevant documents from the vector store."""
-    print("[retrieve_relevant_docs] - Starts retrieving function")
-    try:
-        retrieve_request = {
-            "query": query,
-            "index_name": index_name,
-            "namespace": namespace,
-            "libraries": libraries,
-            "top_k": top_k,
-            "similarity_threshold": similarity_threshold,
-            "sources": sources,
-        }
-        retrieval = retriever.retrieve(RetrieveRequest(**retrieve_request))
-    except Exception as e:
-        print(f"[retrieve_relevant_docs] - Exception type: {type(e)}")
-        print(f"[retrieve_relevant_docs] - Exception repr: {repr(e)}")
-        print(f"[retrieve_relevant_docs] - Exception str: {str(e)}")
-        raise
-
-    print(retrieval.get("results", []))
-    return retrieval.get("results", [])
 
 def _describe_images(image_inputs: List[dict], attachment_context: str, retrieval_query: str) -> tuple[str, str]:
     """Helper function to describe inline image attachments using the vision model."""
@@ -190,10 +147,8 @@ async def process_chat_request(chat_data: dict):
         organization_id = chat_data["organization_id"]
         libraries = chat_data["libraries"]
         source_filter = chat_data.get("sources")
-        top_k = chat_data["top_k"]
         index_name = chat_data["index_name"]
         namespace = chat_data["namespace"]
-        similarity_threshold = chat_data.get("similarity_threshold")  # Will use default from config if not provided
         attachments = chat_data.get("attachments")
         tone_of_voice = chat_data.get("tone_of_voice", None)
         
@@ -239,19 +194,17 @@ async def process_chat_request(chat_data: dict):
             system_message = NO_RAG_SYSTEM_PROMPT.format(tone_of_voice=tone_description)
             logger.info("[process_chat_request] Retrieval disabled; using NO_RAG_SYSTEM_PROMPT")
         else:
-            # Retrieve relevant documents
+            # Retrieve and rerank documents via the full pipeline
             system_message = RAG_SYSTEM_PROMPT.format(tone_of_voice=tone_description)
             try:
-                docs = retrieve_relevant_docs(
+                docs = retrieve_and_rerank(
                     query=retrieval_query,
                     index_name=index_name,
                     namespace=namespace,
                     libraries=libraries,
-                    top_k=top_k,
-                    similarity_threshold=similarity_threshold,
-                    sources=source_filter  # Optional metadata filter
+                    sources=source_filter,
                 )
-                logger.info(f"[process_chat_request] Retrieved {len(docs)} relevant docs")
+                logger.info(f"[process_chat_request] Retrieved and reranked {len(docs)} docs")
             except Exception as e:
                 logger.error(f"[process_chat_request] Error during document retrieval: {e}")
                 docs = []
@@ -390,8 +343,6 @@ async def chat(
     # RAG parameters
     user_id = request.userId
     organization_id = request.organizationId
-    top_k = get_config_value(config_set=CHATBOT_CONFIG, key="top_k")
-    similarity_threshold = SIMILARITY_THRESHOLD
     index_name = str(organization_id)
     namespace = str(user_id)
     libraries = request.libraries
@@ -452,10 +403,8 @@ async def chat(
         "message": message,
         "user_id": user_id,
         "organization_id": organization_id,
-        "similarity_threshold": similarity_threshold,
         "libraries": libraries,
         "sources": sources,
-        "top_k": top_k,
         "index_name": index_name,
         "namespace": namespace,
         "temperature": temperature,

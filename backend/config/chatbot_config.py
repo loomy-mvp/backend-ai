@@ -38,12 +38,28 @@ WEB_SEARCH_KWARG = {
     },
 }
 
-######## RAG Configuration ########
-SIMILARITY_THRESHOLD = 0.4  # Minimum similarity score for retrieved documents
+######## Retrieval Pipeline Configuration ########
+SIMILARITY_THRESHOLD = 0.3  # Minimum similarity score for initial retrieval
 
 EMBEDDING_CONFIG = {
     "model": 'embed-v4.0',  # e.g., "text-embedding-3-small"
     "provider": 'cohere',  # e.g., "openai"
+}
+
+RETRIEVAL_PIPELINE_CONFIG = {
+    "retrieval_top_k": 100,          # Initial retrieval: how many chunks to fetch from vector store
+    "retrieval_similarity_threshold": 0.3,  # Minimum similarity for initial retrieval
+    "bm25_top_k": 25,                # BM25 reranking: reduce to this many chunks
+    "reranker_top_k": 5,             # Reranking model: final number of chunks to return
+    "reranker_provider": "langsearch",  # "langsearch" or "cohere"
+    "reranker_model": "langsearch-reranker-v1",  # Model identifier for the selected provider
+    "use_reranker": True,            # Set to False to skip the reranking model step
+}
+
+# BM25 parameters for lexical reranking of retrieved documents
+BM25_CONFIG = {
+    "k1": 1.5,
+    "b": 0.75,
 }
 
 RETRIEVAL_JUDGE_CONFIG = {

@@ -5,6 +5,12 @@ from .services.chatbot_api import chatbot_router
 from .services.write_api import write_router
 from .services.internal_api import internal_router
 from .utils.db_utils import DBUtils
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
