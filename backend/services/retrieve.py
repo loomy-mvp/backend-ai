@@ -167,7 +167,7 @@ class Retriever:
             retrieved_docs = []
             for match in aggregated_matches:
                 metadata = match.get("metadata", {})
-                print(f"[retrieve] Match metadata: {metadata}")
+                # print(f"[retrieve] Match metadata: {metadata}")
                 retrieved_docs.append({
                     "chunk_id": match.get("chunk_id"),
                     "chunk_text": metadata.get("chunk_text", ""),
